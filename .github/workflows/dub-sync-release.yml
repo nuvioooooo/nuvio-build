@@ -1,7 +1,8 @@
 name: Dublaj eklentili APK (upstream senkron + release)
 
-# Nuvio (NuvioMedia/NuvioTV) güncellenince: son upstream kodunu al, dublaj eklentisini
-# (dub-addon/) üstüne uygula, imzalı APK derle, bu forkta GitHub Release olarak yayınla.
+# Nuvio (NuvioMedia/NuvioTV) YENİ BİR SÜRÜM yayınlayınca (ör. 1.1.0-beta.9 -> beta.10):
+# o sürümün kodunu al, dublaj eklentisini (dub-addon/) üstüne uygula, imzalı APK derle,
+# bu depoda GitHub Release olarak yayınla. Ara commit'ler yeni sürüm üretmez.
 # Uygulamadaki "Güncelleme" ekranı bu release'e bakar.
 
 on:
@@ -36,10 +37,34 @@ jobs:
         with:
           path: fork
 
-      - name: Upstream Nuvio (tam geçmiş, 3-way birleştirme için)
+      - name: Depo hareketsiz kalmasın (GitHub 60 gün kuralı)
+        if: github.event_name == 'schedule'
+        working-directory: fork
+        run: |
+          last="$(gh api "repos/${GITHUB_REPOSITORY}/branches/keepalive" --jq '.commit.commit.committer.date' 2>/dev/null || true)"
+          if [ -z "$last" ] || [ $(( ( $(date +%s) - $(date -d "$last" +%s) ) / 86400 )) -ge 30 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git checkout -q --orphan keepalive
+            git rm -rf -q . 2>/dev/null || true
+            git commit -q --allow-empty -m "keepalive $(date -u +%F)"
+            git push -q -f origin keepalive || echo "::warning::keepalive dalı gönderilemedi"
+          fi
+
+      - name: Nuvio'nun en son yayınlanan sürümü
+        id: upstream
+        run: |
+          tag="$(gh api "repos/${UPSTREAM_REPO}/releases?per_page=10" \
+                   --jq '[.[] | select(.draft == false)][0].tag_name')"
+          [ -n "$tag" ] && [ "$tag" != "null" ] || { echo "::error::Upstream release bulunamadı"; exit 1; }
+          echo "Upstream son sürüm: $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Upstream Nuvio (o sürüm, tam geçmiş, 3-way birleştirme için)
         uses: actions/checkout@v4
         with:
           repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ steps.upstream.outputs.tag }}
           fetch-depth: 0
           path: nuvio
 
@@ -48,7 +73,7 @@ jobs:
         run: |
           up_sha="$(git -C nuvio rev-parse HEAD)"
           addon_hash="$(git -C fork ls-tree -r HEAD dub-addon | sha1sum | cut -c1-12)"
-          key="${up_sha:0:12}-${addon_hash}"
+          key="${{ steps.upstream.outputs.tag }}-${addon_hash}"
           echo "key=${key}" >> "$GITHUB_OUTPUT"
           echo "up_sha=${up_sha}" >> "$GITHUB_OUTPUT"
 
@@ -86,7 +111,7 @@ jobs:
         if: failure() && steps.apply.outcome == 'failure'
         run: |
           title="Dublaj eklentisi güncel Nuvio ile birleşemedi"
-          body="Upstream \`${{ steps.check.outputs.up_sha }}\` üstüne yamalar uygulanamadı. Yeni APK **yayınlanmadı**, eski sürüm çalışmaya devam eder.
+          body="Nuvio \`${{ steps.upstream.outputs.tag }}\` üstüne yamalar uygulanamadı. Yeni APK **yayınlanmadı**, eski sürüm çalışmaya devam eder.
 
           Çözüm: \`dub-addon/README.md\` → \"Çakışma olursa\" bölümü.
 
@@ -176,7 +201,7 @@ jobs:
           Türkçe dublaj + senkron eklentili Nuvio TV.
 
           - Nuvio (upstream) sürümü: \`${{ steps.rev.outputs.upstream_version }}\`
-          - Upstream commit: \`${{ steps.check.outputs.up_sha }}\`
+          - Upstream sürüm etiketi: \`${{ steps.upstream.outputs.tag }}\` (commit \`${{ steps.check.outputs.up_sha }}\`)
           - Eklenti sürümü: \`${{ steps.rev.outputs.rev }}\`
 
           <!-- dub-build-key: ${{ steps.check.outputs.key }} -->
