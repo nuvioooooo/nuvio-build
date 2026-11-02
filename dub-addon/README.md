@@ -38,10 +38,14 @@ Nuvio (NuvioMedia/NuvioTV) ──► [her gün 03:17 UTC] ──► son kod + du
    önce kaldırman gerekebilir. Bundan sonrası uygulama içinden güncellenir.
 
 ## Nasıl güncellenir?
-- Her gün otomatik kontrol edilir. Nuvio'da **veya** `dub-addon/` içinde yeni bir şey yoksa derleme atlanır.
-- Sürüm adı: Nuvio `1.1.0-beta.9` ise bu fork `1.1.0-beta.9.dub.1`, `.dub.2` … olur. Nuvio yeni sürüme
-  geçince numara onunla birlikte ilerler; güncelleyici bunu doğru sıralar.
-- Elle tetiklemek için *Run workflow*.
+- Her gün otomatik kontrol edilir. İş akışı Nuvio'nun **en son yayınlanan sürümüne** (Releases) bakar.
+  Nuvio yeni bir sürüm yayınlamadıysa ve `dub-addon/` değişmediyse derleme atlanır. Ara commit'ler yeni APK üretmez.
+- Sürüm adı: Nuvio `1.1.0-beta.9` ise bu depo `1.1.0-beta.9.dub.1`, `.dub.2` … üretir. Nuvio `beta.10`'a geçince
+  `1.1.0-beta.10.dub.1` çıkar ve uygulama içinde güncelleme bildirimi görünür.
+- Elle tetiklemek için *Run workflow* (isteğe bağlı *force*).
+- GitHub, 60 gün hareketsiz public depolarda zamanlanmış iş akışlarını kapatır. İş akışı ayda bir `keepalive` dalına
+  boş bir commit atarak bunu önlemeye çalışır (ana dal geçmişine karışmaz). Yine de Actions sekmesinde iş akışı
+  "disabled" görünürse elle yeniden etkinleştir.
 
 ## Çakışma olursa
 Nuvio, yamalanan satırların tam yanındaki kodu değiştirirse iş akışı **durur, APK yayınlamaz** ve bir issue açar
