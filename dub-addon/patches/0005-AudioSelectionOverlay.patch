@@ -1,0 +1,163 @@
+diff --git a/app/src/main/java/com/nuvio/tv/ui/screens/player/AudioSelectionOverlay.kt b/app/src/main/java/com/nuvio/tv/ui/screens/player/AudioSelectionOverlay.kt
+index 323c68ace..8b54e7818 100644
+--- a/app/src/main/java/com/nuvio/tv/ui/screens/player/AudioSelectionOverlay.kt
++++ b/app/src/main/java/com/nuvio/tv/ui/screens/player/AudioSelectionOverlay.kt
+@@ -23,7 +23,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
+ import androidx.compose.material.icons.Icons
+ import androidx.compose.material.icons.filled.Add
+ import androidx.compose.material.icons.filled.Check
++import androidx.compose.material.icons.filled.Refresh
+ import androidx.compose.material.icons.filled.Remove
++import androidx.compose.material.icons.filled.Search
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.CompositionLocalProvider
+ import androidx.compose.runtime.LaunchedEffect
+@@ -76,7 +78,10 @@ internal fun AudioSelectionOverlay(
+     onCenterMixLevelChange: (Int) -> Unit,
+     onPersistAmplificationChange: (Boolean) -> Unit,
+     onDismiss: () -> Unit,
+-    modifier: Modifier = Modifier
++    modifier: Modifier = Modifier,
++    onAddExternalAudio: () -> Unit = {},
++    onSearchDubAudio: () -> Unit = {},
++    onSyncDubAudio: () -> Unit = {}
+ ) {
+     val tracksFocusRequester = remember { FocusRequester() }
+     val delayMinusFocusRequester = remember { FocusRequester() }
+@@ -196,7 +201,10 @@ internal fun AudioSelectionOverlay(
+                             else -> persistFocusRequester
+                         },
+                         onTrackFocused = { lastFocusedAudioIndex = it },
+-                        onTrackSelected = onTrackSelected
++                        onTrackSelected = onTrackSelected,
++                        onAddExternalAudio = onAddExternalAudio,
++                        onSearchDubAudio = onSearchDubAudio,
++                        onSyncDubAudio = onSyncDubAudio
+                     )
+                 }
+                 Column(modifier = Modifier.width(268.dp)) {
+@@ -237,7 +245,10 @@ private fun AudioTracksContent(
+     initialFocusRequester: FocusRequester,
+     rightFocusRequester: FocusRequester,
+     onTrackFocused: (Int) -> Unit,
+-    onTrackSelected: (Int) -> Unit
++    onTrackSelected: (Int) -> Unit,
++    onAddExternalAudio: () -> Unit,
++    onSearchDubAudio: () -> Unit,
++    onSyncDubAudio: () -> Unit
+ ) {
+     if (tracks.isEmpty()) {
+         Text(
+@@ -246,6 +257,9 @@ private fun AudioTracksContent(
+             color = Color.White.copy(alpha = 0.7f),
+             modifier = Modifier.padding(top = NuvioTheme.spacing.sm, bottom = NuvioTheme.spacing.md)
+         )
++        SearchDubAudioCard(onClick = onSearchDubAudio, rightFocusRequester = rightFocusRequester)
++        SyncDubAudioCard(onClick = onSyncDubAudio, rightFocusRequester = rightFocusRequester)
++        AddExternalAudioCard(onClick = onAddExternalAudio, rightFocusRequester = rightFocusRequester)
+         return
+     }
+ 
+@@ -273,6 +287,102 @@ private fun AudioTracksContent(
+                 }
+             )
+         }
++        item(key = "search_dub_audio") {
++            SearchDubAudioCard(onClick = onSearchDubAudio, rightFocusRequester = rightFocusRequester)
++        }
++        item(key = "sync_dub_audio") {
++            SyncDubAudioCard(onClick = onSyncDubAudio, rightFocusRequester = rightFocusRequester)
++        }
++        item(key = "add_external_audio") {
++            AddExternalAudioCard(onClick = onAddExternalAudio, rightFocusRequester = rightFocusRequester)
++        }
++    }
++}
++
++@Composable
++private fun AddExternalAudioCard(
++    onClick: () -> Unit,
++    rightFocusRequester: FocusRequester
++) {
++    AudioActionCard(
++        label = "Harici ses ekle (URL)",
++        icon = Icons.Default.Add,
++        onClick = onClick,
++        rightFocusRequester = rightFocusRequester
++    )
++}
++
++@Composable
++private fun SearchDubAudioCard(
++    onClick: () -> Unit,
++    rightFocusRequester: FocusRequester
++) {
++    AudioActionCard(
++        label = "Türkçe dublaj ara",
++        icon = Icons.Default.Search,
++        onClick = onClick,
++        rightFocusRequester = rightFocusRequester
++    )
++}
++
++@Composable
++private fun SyncDubAudioCard(
++    onClick: () -> Unit,
++    rightFocusRequester: FocusRequester
++) {
++    AudioActionCard(
++        label = "Dublajı otomatik senkronla",
++        icon = Icons.Default.Refresh,
++        onClick = onClick,
++        rightFocusRequester = rightFocusRequester
++    )
++}
++
++@Composable
++private fun AudioActionCard(
++    label: String,
++    icon: ImageVector,
++    onClick: () -> Unit,
++    rightFocusRequester: FocusRequester
++) {
++    Card(
++        onClick = onClick,
++        modifier = Modifier
++            .fillMaxWidth()
++            .focusProperties { right = rightFocusRequester },
++        colors = CardDefaults.colors(
++            containerColor = Color.Transparent,
++            focusedContainerColor = Color.Transparent
++        ),
++        shape = CardDefaults.shape(RoundedCornerShape(NuvioTheme.radii.md)),
++        border = CardDefaults.border(
++            border = Border(
++                border = BorderStroke(NuvioTheme.spacing.xxs, Color.Transparent),
++                shape = RoundedCornerShape(NuvioTheme.radii.md)
++            ),
++            focusedBorder = Border(
++                border = NuvioTheme.focusRing.border(NuvioTheme.spacing.xxs),
++                shape = RoundedCornerShape(NuvioTheme.radii.md)
++            )
++        ),
++        scale = CardDefaults.scale(focusedScale = 1f, pressedScale = 1f)
++    ) {
++        Row(
++            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
++            verticalAlignment = Alignment.CenterVertically,
++            horizontalArrangement = Arrangement.spacedBy(10.dp)
++        ) {
++            Icon(
++                imageVector = icon,
++                contentDescription = null,
++                tint = Color.White
++            )
++            Text(
++                text = label,
++                style = MaterialTheme.typography.titleMedium,
++                color = Color.White
++            )
++        }
+     }
+ }
+ 
