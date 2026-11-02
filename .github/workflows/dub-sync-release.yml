@@ -1,0 +1,186 @@
+name: Dublaj eklentili APK (upstream senkron + release)
+
+# Nuvio (NuvioMedia/NuvioTV) güncellenince: son upstream kodunu al, dublaj eklentisini
+# (dub-addon/) üstüne uygula, imzalı APK derle, bu forkta GitHub Release olarak yayınla.
+# Uygulamadaki "Güncelleme" ekranı bu release'e bakar.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"        # her gün 03:17 UTC
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Değişiklik olmasa da yeniden derle"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: dub-sync-release
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: NuvioMedia/NuvioTV
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Fork (eklenti dosyaları)
+        uses: actions/checkout@v4
+        with:
+          path: fork
+
+      - name: Upstream Nuvio (tam geçmiş, 3-way birleştirme için)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          fetch-depth: 0
+          path: nuvio
+
+      - name: Değişiklik var mı?
+        id: check
+        run: |
+          up_sha="$(git -C nuvio rev-parse HEAD)"
+          addon_hash="$(git -C fork ls-tree -r HEAD dub-addon | sha1sum | cut -c1-12)"
+          key="${up_sha:0:12}-${addon_hash}"
+          echo "key=${key}" >> "$GITHUB_OUTPUT"
+          echo "up_sha=${up_sha}" >> "$GITHUB_OUTPUT"
+
+          bodies="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=50" --jq '.[].body')"
+          if grep -q "dub-build-key: ${key}" <<<"${bodies}" && [ "${{ inputs.force }}" != "true" ]; then
+            echo "Yeni bir şey yok (${key}), atlanıyor."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sürüm sayacını hesapla
+        if: steps.check.outputs.skip == 'false'
+        id: rev
+        run: |
+          ver="$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)".*/\1/p' nuvio/app/build.gradle.kts | head -1)"
+          existing="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '.[].tag_name' \
+                      | grep -cE "^v$(printf '%s' "$ver" | sed 's/[.]/\\./g')[.-]dub\.[0-9]+$" || true)"
+          echo "rev=$((existing + 1))" >> "$GITHUB_OUTPUT"
+          echo "upstream_version=${ver}" >> "$GITHUB_OUTPUT"
+
+      - name: Eklentiyi uygula
+        if: steps.check.outputs.skip == 'false'
+        id: apply
+        env:
+          DUB_RELEASE_OWNER: ${{ github.repository_owner }}
+          DUB_RELEASE_REPO: ${{ github.event.repository.name }}
+          DUB_REV: ${{ steps.rev.outputs.rev }}
+        run: |
+          set -o pipefail
+          bash fork/dub-addon/apply.sh nuvio | tee apply.log
+          echo "version_name=$(sed -n 's/^VERSION_NAME=//p' apply.log)" >> "$GITHUB_OUTPUT"
+
+      - name: Çakışma olursa issue aç
+        if: failure() && steps.apply.outcome == 'failure'
+        run: |
+          title="Dublaj eklentisi güncel Nuvio ile birleşemedi"
+          body="Upstream \`${{ steps.check.outputs.up_sha }}\` üstüne yamalar uygulanamadı. Yeni APK **yayınlanmadı**, eski sürüm çalışmaya devam eder.
+
+          Çözüm: \`dub-addon/README.md\` → \"Çakışma olursa\" bölümü.
+
+          Çalıştırma: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          open_issue="$(gh issue list --state open --search "\"${title}\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -z "${open_issue}" ]; then
+            gh issue create --title "${title}" --body "${body}"
+          fi
+
+      - uses: actions/setup-java@v4
+        if: steps.check.outputs.skip == 'false'
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.check.outputs.skip == 'false'
+
+      - name: İmza ve local.properties
+        if: steps.check.outputs.skip == 'false'
+        working-directory: nuvio
+        env:
+          LOCAL_PROPERTIES_BASE64: ${{ secrets.LOCAL_PROPERTIES_BASE64 }}
+          LOCAL_DEV_PROPERTIES_BASE64: ${{ secrets.LOCAL_DEV_PROPERTIES_BASE64 }}
+          DUB_KEYSTORE_BASE64: ${{ secrets.DUB_KEYSTORE_BASE64 }}
+          DUB_KEY_ALIAS: ${{ secrets.DUB_KEY_ALIAS }}
+          DUB_KEY_PASSWORD: ${{ secrets.DUB_KEY_PASSWORD }}
+          DUB_STORE_PASSWORD: ${{ secrets.DUB_STORE_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          AVATAR_PUBLIC_BASE_URL: ${{ secrets.AVATAR_PUBLIC_BASE_URL }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
+          MDBLIST_CLIENT_ID: ${{ secrets.MDBLIST_CLIENT_ID }}
+        run: |
+          for v in DUB_KEYSTORE_BASE64 DUB_KEY_ALIAS DUB_KEY_PASSWORD DUB_STORE_PASSWORD; do
+            [ -n "${!v}" ] || { echo "::error::Eksik secret: $v (bkz. dub-addon/README.md)"; exit 1; }
+          done
+          ks="${RUNNER_TEMP}/dub-release.jks"
+          printf '%s' "$DUB_KEYSTORE_BASE64" | base64 --decode > "$ks"
+
+          if [ -n "$LOCAL_PROPERTIES_BASE64" ]; then
+            printf '%s' "$LOCAL_PROPERTIES_BASE64" | base64 --decode > local.properties
+          else
+            : > local.properties
+          fi
+          if [ -n "$LOCAL_DEV_PROPERTIES_BASE64" ]; then
+            printf '%s' "$LOCAL_DEV_PROPERTIES_BASE64" | base64 --decode > local.dev.properties
+          fi
+          sed -i -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_[A-Z_]+)[[:space:]]*=/d' local.properties
+          {
+            printf '\n'
+            echo "NUVIO_RELEASE_STORE_FILE=${ks}"
+            echo "NUVIO_RELEASE_KEY_ALIAS=${DUB_KEY_ALIAS}"
+            echo "NUVIO_RELEASE_KEY_PASSWORD=${DUB_KEY_PASSWORD}"
+            echo "NUVIO_RELEASE_STORE_PASSWORD=${DUB_STORE_PASSWORD}"
+          } >> local.properties
+
+          # Ayrı secret'lar (varsa) en sona eklenir, üsttekileri ezer. Uygulama NUVIO_ önekli Supabase anahtarlarını okur.
+          add() { [ -n "$2" ] && printf '%s=%s\n' "$1" "$2" >> local.properties || true; }
+          add NUVIO_SUPABASE_URL "$SUPABASE_URL"
+          add NUVIO_SUPABASE_ANON_KEY "$SUPABASE_ANON_KEY"
+          add AVATAR_PUBLIC_BASE_URL "$AVATAR_PUBLIC_BASE_URL"
+          add TMDB_API_KEY "$TMDB_API_KEY"
+          add SIMKL_CLIENT_ID "$SIMKL_CLIENT_ID"
+          add MDBLIST_CLIENT_ID "$MDBLIST_CLIENT_ID"
+
+          # Kontrol (değerler gösterilmez)
+          for k in NUVIO_SUPABASE_URL NUVIO_SUPABASE_ANON_KEY AVATAR_PUBLIC_BASE_URL TMDB_API_KEY SIMKL_CLIENT_ID MDBLIST_CLIENT_ID; do
+            if grep -q "^$k=." local.properties; then echo "$k: VAR"; else echo "$k: EKSIK"; fi
+          done
+
+      - name: Derle (updater testleri + full release APK)
+        if: steps.check.outputs.skip == 'false'
+        working-directory: nuvio
+        run: ./gradlew :app:testFullReleaseUnitTest --tests 'com.nuvio.tv.updater.*' :app:assembleFullRelease --stacktrace
+
+      - name: Release yayınla
+        if: steps.check.outputs.skip == 'false'
+        working-directory: nuvio
+        env:
+          TAG: v${{ steps.apply.outputs.version_name }}
+        run: |
+          mapfile -t apks < <(find app/build/outputs/apk/full/release -maxdepth 1 -name '*.apk' | sort)
+          (( ${#apks[@]} > 0 )) || { echo "::error::APK üretilmedi"; exit 1; }
+          cat > notes.md <<NOTES
+          Türkçe dublaj + senkron eklentili Nuvio TV.
+
+          - Nuvio (upstream) sürümü: \`${{ steps.rev.outputs.upstream_version }}\`
+          - Upstream commit: \`${{ steps.check.outputs.up_sha }}\`
+          - Eklenti sürümü: \`${{ steps.rev.outputs.rev }}\`
+
+          <!-- dub-build-key: ${{ steps.check.outputs.key }} -->
+          NOTES
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --target "${GITHUB_SHA}" --title "Nuvio TV + Dublaj ${TAG#v}" \
+            --notes-file notes.md --latest "${apks[@]}"
