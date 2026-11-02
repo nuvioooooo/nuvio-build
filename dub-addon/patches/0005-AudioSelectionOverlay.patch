@@ -1,5 +1,5 @@
 diff --git a/app/src/main/java/com/nuvio/tv/ui/screens/player/AudioSelectionOverlay.kt b/app/src/main/java/com/nuvio/tv/ui/screens/player/AudioSelectionOverlay.kt
-index 323c68ace..8b54e7818 100644
+index 323c68ace..0abef24a9 100644
 --- a/app/src/main/java/com/nuvio/tv/ui/screens/player/AudioSelectionOverlay.kt
 +++ b/app/src/main/java/com/nuvio/tv/ui/screens/player/AudioSelectionOverlay.kt
 @@ -23,7 +23,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
@@ -48,17 +48,16 @@ index 323c68ace..8b54e7818 100644
  ) {
      if (tracks.isEmpty()) {
          Text(
-@@ -246,6 +257,9 @@ private fun AudioTracksContent(
+@@ -246,6 +257,8 @@ private fun AudioTracksContent(
              color = Color.White.copy(alpha = 0.7f),
              modifier = Modifier.padding(top = NuvioTheme.spacing.sm, bottom = NuvioTheme.spacing.md)
          )
 +        SearchDubAudioCard(onClick = onSearchDubAudio, rightFocusRequester = rightFocusRequester)
 +        SyncDubAudioCard(onClick = onSyncDubAudio, rightFocusRequester = rightFocusRequester)
-+        AddExternalAudioCard(onClick = onAddExternalAudio, rightFocusRequester = rightFocusRequester)
          return
      }
  
-@@ -273,6 +287,102 @@ private fun AudioTracksContent(
+@@ -273,6 +286,88 @@ private fun AudioTracksContent(
                  }
              )
          }
@@ -69,22 +68,8 @@ index 323c68ace..8b54e7818 100644
 +            SyncDubAudioCard(onClick = onSyncDubAudio, rightFocusRequester = rightFocusRequester)
 +        }
 +        item(key = "add_external_audio") {
-+            AddExternalAudioCard(onClick = onAddExternalAudio, rightFocusRequester = rightFocusRequester)
-+        }
++            }
 +    }
-+}
-+
-+@Composable
-+private fun AddExternalAudioCard(
-+    onClick: () -> Unit,
-+    rightFocusRequester: FocusRequester
-+) {
-+    AudioActionCard(
-+        label = "Harici ses ekle (URL)",
-+        icon = Icons.Default.Add,
-+        onClick = onClick,
-+        rightFocusRequester = rightFocusRequester
-+    )
 +}
 +
 +@Composable
