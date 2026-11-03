@@ -11,6 +11,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.audio.AudioProcessor
@@ -215,6 +216,66 @@ internal object DubAudioProbe {
             throw e
         } catch (e: Exception) {
             Log.w(PROBE_TAG, "probe failed: ${e.message}")
+            null
+        } finally {
+            withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) {
+                main.removeCallbacksAndMessages(null)
+                player?.release()
+            }
+        }
+    }
+
+    /**
+     * Length of [source] as the media itself reports it, null when unknown or unreadable. A headless
+     * player with every track type switched off is prepared, so nothing is decoded and only the
+     * header / playlist is read. Used to compare the length of the dub with that of the video.
+     */
+    suspend fun durationMs(context: Context, source: MediaSource, timeoutMs: Long = 20_000L): Long? {
+        val done = CompletableDeferred<Long?>()
+        val main = Handler(Looper.getMainLooper())
+        var player: ExoPlayer? = null
+        return try {
+            withContext(Dispatchers.Main) {
+                val p = ExoPlayer.Builder(context).build()
+                player = p
+                p.volume = 0f
+                p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true)
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                    .build()
+                fun report() {
+                    val d = p.duration
+                    if (d != C.TIME_UNSET && d > 0L) done.complete(d)
+                }
+                p.addListener(object : Player.Listener {
+                    override fun onPlayerError(error: PlaybackException) {
+                        Log.w(PROBE_TAG, "duration probe error: ${error.errorCodeName}")
+                        done.complete(null)
+                    }
+
+                    override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                        if (!timeline.isEmpty) report()
+                    }
+
+                    override fun onPlaybackStateChanged(state: Int) {
+                        if (state == Player.STATE_READY || state == Player.STATE_ENDED) {
+                            report()
+                            // Ready without a known length (live / unknown): nothing to compare.
+                            done.complete(null)
+                        }
+                    }
+                })
+                p.setMediaSource(source)
+                p.prepare()
+            }
+            val result = withTimeoutOrNull(timeoutMs) { done.await() }
+            Log.i(PROBE_TAG, "duration probe: ${result}ms")
+            result
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(PROBE_TAG, "duration probe failed: ${e.message}")
             null
         } finally {
             withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) {

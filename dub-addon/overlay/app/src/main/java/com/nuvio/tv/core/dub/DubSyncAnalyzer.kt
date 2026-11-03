@@ -15,7 +15,8 @@ import kotlin.math.sqrt
  * Estimates how far a dub is shifted against the original of the same video. Android-free on
  * purpose: it is unit tested on the JVM.
  *
- * Two independent kinds of evidence, both correlated over +-[MAX_LAG] frames:
+ * Two independent kinds of evidence, both correlated over +-[MAX_LAG] frames (the dub capture is
+ * wider than the original one by [MAX_LAG] frames on each side):
  *
  *  - SUBTITLES: the cues of an EMBEDDED subtitle track (locked to the video, unlike downloaded
  *    ones) say when somebody speaks; that is matched with the speech-band loudness of the dub.
@@ -31,7 +32,10 @@ import kotlin.math.sqrt
  *  - only subtitles conclusive       -> subtitles, refined by music/effects inside +-[REFINE_RADIUS]
  *    frames when that shows a clear peak there
  *  - only music/effects conclusive   -> music/effects
- *  - otherwise                       -> rejected, the user adjusts by hand
+ *  - otherwise                       -> the per-window peaks are fitted with a line (see [findDrift]):
+ *      a constant line is a result after all (the odd window out is ignored), a sloped line is
+ *      reported as [Result.Drift] (the dub runs at another speed); anything else is rejected and
+ *      the user adjusts by hand
  *
  * "Conclusive" always means: the windows' correlation curves are averaged (the true shift adds up
  * coherently, unrelated peaks cancel), the combined peak stands out from the rest of the curve,
@@ -41,7 +45,13 @@ import kotlin.math.sqrt
 internal object DubSyncAnalyzer {
 
     const val FRAME_MS = 10
-    const val MAX_LAG = 800
+
+    /**
+     * Largest shift that is searched, in frames (1500 = +-15 s). The dub side of every window must
+     * be captured [MAX_LAG] frames earlier and [MAX_LAG] frames longer than the original side, so
+     * that every lag is compared over the FULL original window (see [crossCorrelate]).
+     */
+    const val MAX_LAG = 1500
     const val MIN_USABLE_FRAMES = 1000
 
     /** Windows needed before [analyze] can say anything. */
@@ -77,6 +87,18 @@ internal object DubSyncAnalyzer {
     /** Two conclusive methods must agree within this, otherwise the result is thrown away. */
     private const val AGREE_MS = 300
 
+    // Drift: every window's own peak is a point (film position, lag); a line through enough of them
+    // says the lag is not constant. Random peaks are spread over +-15 s, so four of them landing
+    // within a few hundred ms of one line by chance is practically impossible.
+    private const val DRIFT_MIN_POINTS = 4
+    private const val DRIFT_MIN_SPAN_MS = 120_000.0
+    private const val DRIFT_MAX_SLOPE = 0.01
+    private const val DRIFT_MIN_TOTAL_MS = 300.0
+    private const val DRIFT_MIN_Z_ME = 5.0
+    private const val DRIFT_MIN_Z_SUB = 4.5
+    private const val DRIFT_TOL_MS_ME = 120.0
+    private const val DRIFT_TOL_MS_SUB = 250.0
+
     enum class Method(val label: String) {
         MUSIC_EFFECTS("müzik/efekt"),
         SUBTITLES("gömülü altyazı"),
@@ -97,6 +119,22 @@ internal object DubSyncAnalyzer {
             val windows: Int
         ) : Result()
 
+        /**
+         * The lag is not constant: at film position p (ms) the dub plays [offsetMs] + [slope] * p
+         * ms later than the original. slope < 0: the dub runs faster than the video and gets ahead
+         * (25 fps dub on a 23.976 fps video); slope > 0: it falls behind. A single delay cannot fix
+         * this, it needs a speed change of the dub (1 + slope).
+         */
+        data class Drift(
+            val slope: Double,
+            val offsetMs: Int,
+            val method: Method,
+            val inliers: Int,
+            val windows: Int
+        ) : Result() {
+            fun lagAtMs(positionMs: Long): Int = Math.round(offsetMs + slope * positionMs).toInt()
+        }
+
         data class Unreliable(val reason: String) : Result()
     }
 
@@ -104,15 +142,22 @@ internal object DubSyncAnalyzer {
     fun hasOriginalAudio(windows: List<Pair<ProbeCapture, ProbeCapture>>): Boolean =
         windows.count { it.first.bands != null } >= MIN_WINDOWS
 
-    /** [windows] = (original, dub) captures for the same video stretches. */
+    /**
+     * [windows] = (original, dub) captures for the same video stretches. [positionsMs] = the film
+     * position (centre of the stretch) of each window, same order; without it a drift cannot be
+     * recognised.
+     */
     fun analyze(
         windows: List<Pair<ProbeCapture, ProbeCapture>>,
-        trace: (String) -> Unit = {}
+        trace: (String) -> Unit = {},
+        positionsMs: List<Long>? = null
     ): Result {
         if (windows.size < MIN_WINDOWS) return Result.Unreliable("yeterli ses penceresi yok (${windows.size}/$MIN_WINDOWS)")
 
-        val sub = subtitleCurves(windows)
-        val me = musicCurves(windows)
+        val subUsed = ArrayList<Int>()
+        val meUsed = ArrayList<Int>()
+        val sub = subtitleCurves(windows, subUsed)
+        val me = musicCurves(windows, meUsed)
         val subVerdict = sub?.let { judge(it, SUB, "gömülü altyazı", trace) }
         val meVerdict = me?.let { judge(it, ME, "müzik/efekt", trace) }
 
@@ -145,19 +190,27 @@ internal object DubSyncAnalyzer {
                 )
             } else s.toOk(Method.SUBTITLES, precise = false)
         }
+        if (positionsMs != null && positionsMs.size == windows.size) {
+            findDrift(sub, subUsed, me, meUsed, positionsMs, windows.size, trace)?.let { return it }
+        }
         return Result.Unreliable(reasons.joinToString("; ").ifEmpty { "eşleşme bulunamadı" })
     }
 
     // ---- curves ------------------------------------------------------------------------------
 
     /** One correlation curve per usable window (subtitle cues vs speech loudness of the dub). */
-    private fun subtitleCurves(windows: List<Pair<ProbeCapture, ProbeCapture>>): List<DoubleArray>? {
+    private fun subtitleCurves(
+        windows: List<Pair<ProbeCapture, ProbeCapture>>,
+        used: MutableList<Int>
+    ): List<DoubleArray>? {
         val curves = ArrayList<DoubleArray>()
-        for ((orig, dub) in windows) {
+        for ((index, window) in windows.withIndex()) {
+            val (orig, dub) = window
             val cues = orig.cueActivity ?: continue
             val bands = dub.bands ?: continue
-            val n = min(cues.size, bands[0].size)
-            if (n < MIN_USABLE_FRAMES) continue
+            val n = cues.size
+            val m = bands[0].size
+            if (n < MIN_USABLE_FRAMES || m < n) continue
             var on = 0
             for (i in 0 until n) if (cues[i] > 0f) on++
             val coverage = on.toDouble() / n
@@ -165,28 +218,37 @@ internal object DubSyncAnalyzer {
             val lowMid = bands[ProbeCapture.BAND_LOWMID]
             val mid = bands[ProbeCapture.BAND_MID]
             val a = standardize(gaussSmooth(DoubleArray(n) { cues[it].toDouble() }, SUB_SMOOTH_SIGMA)) ?: continue
-            val speech = DoubleArray(n) { ln(max((lowMid[it] + mid[it]).toDouble(), MIN_BAND_ENERGY)) }
+            val speech = DoubleArray(m) { ln(max((lowMid[it] + mid[it]).toDouble(), MIN_BAND_ENERGY)) }
             val b = standardize(gaussSmooth(speech, SUB_SMOOTH_SIGMA)) ?: continue
-            curves.add(crossCorrelate(a, b))
+            curves.add(crossCorrelate(a, b, bLead = MAX_LAG))
+            used.add(index)
         }
         return curves.takeIf { it.size >= MIN_WINDOWS }
     }
 
     /** One correlation curve per usable window (loudness onsets, mean over the bands). */
-    private fun musicCurves(windows: List<Pair<ProbeCapture, ProbeCapture>>): List<DoubleArray>? {
+    private fun musicCurves(
+        windows: List<Pair<ProbeCapture, ProbeCapture>>,
+        used: MutableList<Int>
+    ): List<DoubleArray>? {
         val curves = ArrayList<DoubleArray>()
-        for ((orig, dub) in windows) {
+        for ((index, window) in windows.withIndex()) {
+            val (orig, dub) = window
             val ob = orig.bands ?: continue
             val db = dub.bands ?: continue
-            val n = min(ob[0].size, db[0].size)
-            if (n < MIN_USABLE_FRAMES) continue
+            val n = ob[0].size
+            val m = db[0].size
+            if (n < MIN_USABLE_FRAMES || m < n) continue
             val perBand = ArrayList<DoubleArray>()
             for (band in ME_BANDS) {
                 val a = bandFeatures(ob[band], n) ?: continue
-                val b = bandFeatures(db[band], n) ?: continue
-                perBand.add(crossCorrelate(a, b))
+                val b = bandFeatures(db[band], m) ?: continue
+                perBand.add(crossCorrelate(a, b, bLead = MAX_LAG))
             }
-            if (perBand.isNotEmpty()) curves.add(mean(perBand))
+            if (perBand.isNotEmpty()) {
+                curves.add(mean(perBand))
+                used.add(index)
+            }
         }
         return curves.takeIf { it.size >= MIN_WINDOWS }
     }
@@ -249,6 +311,118 @@ internal object DubSyncAnalyzer {
         if (p !in 1 until c.size - 1) return 0.0
         val d = c[p - 1] - 2 * c[p] + c[p + 1]
         return if (d == 0.0) 0.0 else (0.5 * (c[p - 1] - c[p + 1]) / d).coerceIn(-1.0, 1.0)
+    }
+
+    // ---- drift -------------------------------------------------------------------------------
+
+    private class LagPoint(val posMs: Double, val lagMs: Double, val z: Double)
+
+    private class LineFit(val offsetMs: Double, val slope: Double, val inliers: List<LagPoint>) {
+        fun lagAt(posMs: Double): Double = offsetMs + slope * posMs
+
+        fun describe(): String = "n=${inliers.size} eğim=${"%.5f".format(slope)} ofset=${offsetMs.toInt()}ms"
+    }
+
+    /** The clear peak of each window's own curve, as (film position, lag). [used] maps curve -> window. */
+    private fun lagPoints(
+        curves: List<DoubleArray>,
+        used: List<Int>,
+        positionsMs: List<Long>,
+        t: Tuning,
+        minZ: Double
+    ): List<LagPoint> {
+        val out = ArrayList<LagPoint>()
+        for (k in curves.indices) {
+            val c = curves[k]
+            val peak = argMax(c)
+            // A peak on the edge of the range is the limit of the search, not a measurement.
+            if (peak < 2 || peak > c.size - 3) continue
+            val z = zScoreAt(c, peak, t.exclude)
+            if (z < minZ) continue
+            val lagFrames = (peak - MAX_LAG) + interpolate(c, peak)
+            out.add(LagPoint(positionsMs[used[k]].toDouble(), lagFrames * FRAME_MS, z))
+        }
+        return out
+    }
+
+    /**
+     * Line lag = offset + slope * position through the most points (every pair of points proposes a
+     * line, the one that most points sit on wins), then least squares over the points on it.
+     * null when fewer than [DRIFT_MIN_POINTS] agree or they all come from one stretch of the film.
+     */
+    private fun fitLine(points: List<LagPoint>, tolMs: Double): LineFit? {
+        if (points.size < DRIFT_MIN_POINTS) return null
+        var best: List<LagPoint> = emptyList()
+        for (i in points.indices) {
+            for (j in i + 1 until points.size) {
+                val dx = points[j].posMs - points[i].posMs
+                if (abs(dx) < DRIFT_MIN_SPAN_MS) continue
+                val slope = (points[j].lagMs - points[i].lagMs) / dx
+                if (abs(slope) > DRIFT_MAX_SLOPE) continue
+                val offset = points[i].lagMs - slope * points[i].posMs
+                val onLine = points.filter { abs(it.lagMs - (offset + slope * it.posMs)) <= tolMs }
+                if (onLine.size > best.size) best = onLine
+            }
+        }
+        if (best.size < DRIFT_MIN_POINTS) return null
+        if (best.maxOf { it.posMs } - best.minOf { it.posMs } < DRIFT_MIN_SPAN_MS) return null
+        val mx = best.sumOf { it.posMs } / best.size
+        val my = best.sumOf { it.lagMs } / best.size
+        var sxx = 0.0
+        var sxy = 0.0
+        for (p in best) {
+            sxx += (p.posMs - mx) * (p.posMs - mx)
+            sxy += (p.posMs - mx) * (p.lagMs - my)
+        }
+        val slope = if (sxx > 1e-9) sxy / sxx else 0.0
+        return LineFit(my - slope * mx, slope, best)
+    }
+
+    /**
+     * Last resort when neither method gave one constant shift over all windows. Fits a line through
+     * each method's per-window peaks. Flat line (the windows that disagreed were just noise):
+     * a normal result. Sloped line: [Result.Drift]. Both methods with lines that disagree: rejected.
+     */
+    private fun findDrift(
+        sub: List<DoubleArray>?,
+        subUsed: List<Int>,
+        me: List<DoubleArray>?,
+        meUsed: List<Int>,
+        positionsMs: List<Long>,
+        windowCount: Int,
+        trace: (String) -> Unit
+    ): Result? {
+        val meFit = me?.let { fitLine(lagPoints(it, meUsed, positionsMs, ME, DRIFT_MIN_Z_ME), DRIFT_TOL_MS_ME) }
+        val subFit = sub?.let { fitLine(lagPoints(it, subUsed, positionsMs, SUB, DRIFT_MIN_Z_SUB), DRIFT_TOL_MS_SUB) }
+        trace("kayma doğrusu: müzik/efekt=${meFit?.describe()} altyazı=${subFit?.describe()}")
+        if (meFit == null && subFit == null) return null
+
+        val method = if (meFit != null) Method.MUSIC_EFFECTS else Method.SUBTITLES
+        val fit = meFit ?: subFit!!
+        val centerMs = fit.inliers.sumOf { it.posMs } / fit.inliers.size
+        if (meFit != null && subFit != null && abs(meFit.lagAt(centerMs) - subFit.lagAt(centerMs)) > AGREE_MS) {
+            return Result.Unreliable("yöntemler birbiriyle çelişiyor")
+        }
+        val spanMs = fit.inliers.maxOf { it.posMs } - fit.inliers.minOf { it.posMs }
+        val meanZ = fit.inliers.sumOf { it.z } / fit.inliers.size
+        return if (abs(fit.slope) * spanMs < DRIFT_MIN_TOTAL_MS) {
+            Result.Ok(
+                lagMs = Math.round(fit.lagAt(centerMs)).toInt(),
+                method = method,
+                precise = method == Method.MUSIC_EFFECTS,
+                psr = meanZ,
+                support = fit.inliers.size,
+                windows = windowCount
+            )
+        } else {
+            Result.Drift(
+                slope = fit.slope,
+                offsetMs = Math.round(fit.offsetMs).toInt(),
+                method = method,
+                inliers = fit.inliers.size,
+                windows = windowCount
+            )
+        }
     }
 
     // ---- features ----------------------------------------------------------------------------
@@ -325,11 +499,15 @@ internal object DubSyncAnalyzer {
     // ---- cross-correlation ---------------------------------------------------------------------
 
     /**
-     * r[k + MAX_LAG] = sum_n a[n] * b[n + k] / N, for k in -MAX_LAG..MAX_LAG. Divided by the full
-     * length (not by the overlap): at large lags only a short stretch overlaps, and dividing by it
-     * would blow the noise up exactly where chance peaks are most likely.
+     * r[k + MAX_LAG] = sum_n a[n] * b[n + k + bLead] / N, for k in -MAX_LAG..MAX_LAG, N = a.size.
+     *
+     * [bLead] = how many frames earlier than [a] the signal [b] starts. With the dub captured
+     * MAX_LAG frames early and MAX_LAG frames long (bLead = MAX_LAG, b.size >= a.size + 2 * MAX_LAG)
+     * all of [a] overlaps [b] at every lag, so large lags are as reliable as small ones. With
+     * bLead = 0 and equal lengths this is the plain correlation: at large lags only a short stretch
+     * overlaps, and the full-length divisor keeps the noise from blowing up there.
      */
-    internal fun crossCorrelate(a: DoubleArray, b: DoubleArray): DoubleArray {
+    internal fun crossCorrelate(a: DoubleArray, b: DoubleArray, bLead: Int = 0): DoubleArray {
         var nfft = 1
         while (nfft < a.size + b.size) nfft = nfft shl 1
         val ar = a.copyOf(nfft)
@@ -350,7 +528,7 @@ internal object DubSyncAnalyzer {
         val norm = min(a.size, b.size).toDouble()
         val out = DoubleArray(2 * MAX_LAG + 1)
         for (idx in out.indices) {
-            val k = idx - MAX_LAG
+            val k = idx - MAX_LAG + bLead
             out[idx] = cr[((k % nfft) + nfft) % nfft] / norm
         }
         return out

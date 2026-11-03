@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.media3.common.C
 import com.nuvio.tv.core.dub.DubAudioProbe
 import com.nuvio.tv.core.dub.DubAutoSettings
+import com.nuvio.tv.core.dub.DubSpeed
 import com.nuvio.tv.core.dub.DubSyncAnalyzer
 import com.nuvio.tv.core.dub.ProbeCapture
 import com.nuvio.tv.domain.model.ExternalAudio
@@ -47,6 +48,16 @@ private const val SYNC_TARGET_MS = 60_000L
 
 /** A window that takes longer than this is given up on (slow source, stalled download). */
 private const val SYNC_WINDOW_TIMEOUT_MS = 30_000L
+
+/**
+ * The dub side of a window is read this much earlier and this much longer on each side than the
+ * original's (the searched shift range, +-15 s): the dub is a small audio file, so the extra
+ * 30 s are cheap, while the original (the heavy one) stays at [SYNC_WINDOW_MS].
+ */
+private val SYNC_DUB_MARGIN_MS: Long = DubSyncAnalyzer.MAX_LAG.toLong() * DubSyncAnalyzer.FRAME_MS
+
+/** The dub window is 3x longer (30 s of extra audio), so it gets a little more time. */
+private const val SYNC_DUB_TIMEOUT_MS = 40_000L
 
 /** A shift smaller than this is below what people notice; leave the delay alone. */
 private const val SYNC_IGNORE_BELOW_MS = 40
@@ -145,11 +156,19 @@ private fun PlayerRuntimeController.startDubSync(audio: ExternalAudio, silent: B
                 async {
                     val source = mediaSourceFactory.createExternalAudioSource(context, audio)
                     if (source == null) null
-                    else DubAudioProbe.capture(context, source, starts[i], SYNC_WINDOW_MS, timeoutMs = SYNC_WINDOW_TIMEOUT_MS)
+                    else DubAudioProbe.capture(
+                        context,
+                        source,
+                        starts[i] - SYNC_DUB_MARGIN_MS,
+                        SYNC_WINDOW_MS + 2 * SYNC_DUB_MARGIN_MS,
+                        timeoutMs = SYNC_DUB_TIMEOUT_MS
+                    )
                 }
             }
 
             val windows = ArrayList<Pair<ProbeCapture, ProbeCapture>>()
+            // Film position (centre of the stretch) of each entry of [windows]: a drift needs it.
+            val positions = ArrayList<Long>()
             var failed = 0
             var best: DubSyncAnalyzer.Result.Ok? = null
             var last: DubSyncAnalyzer.Result = DubSyncAnalyzer.Result.Unreliable("yeterli ses penceresi yok")
@@ -184,6 +203,7 @@ private fun PlayerRuntimeController.startDubSync(audio: ExternalAudio, silent: B
 
                 if (o != null && d != null) {
                     windows.add(o to d)
+                    positions.add(starts[i] + SYNC_WINDOW_MS / 2)
                 } else {
                     failed++
                 }
@@ -198,7 +218,7 @@ private fun PlayerRuntimeController.startDubSync(audio: ExternalAudio, silent: B
                 if (windows.isEmpty() && failed >= 2) break
 
                 if (windows.size >= DubSyncAnalyzer.MIN_WINDOWS) {
-                    last = withContext(Dispatchers.Default) { DubSyncAnalyzer.analyze(windows, trace) }
+                    last = withContext(Dispatchers.Default) { DubSyncAnalyzer.analyze(windows, trace, positions.toList()) }
                     val ok = last as? DubSyncAnalyzer.Result.Ok
                     if (ok != null) {
                         best = ok
@@ -245,11 +265,58 @@ private fun PlayerRuntimeController.startDubSync(audio: ExternalAudio, silent: B
                     ).show()
                 }
             }
+            is DubSyncAnalyzer.Result.Drift -> {
+                // Not remembered: the memory holds ONE delay per video and dub, and this one changes.
+                val perMinuteMs = Math.round(r.slope * 60_000).toInt()
+                val lagNow = r.lagAtMs(player.currentPosition)
+                Log.i(DUB_SYNC_TAG, "drift: slope=${r.slope} offset=${r.offsetMs}ms lagNow=${lagNow}ms inliers=${r.inliers}/${r.windows}")
+                // Only when asked for: a silent automatic run must not change anything on a guess.
+                if (!silent) {
+                    if (abs(lagNow) >= SYNC_IGNORE_BELOW_MS_COARSE) applyMeasuredDubDelay(-lagNow, audio.lang)
+                    val dir = if (r.slope < 0) "öne kayıyor (dublaj hızlı)" else "geride kalıyor (dublaj yavaş)"
+                    Toast.makeText(
+                        context,
+                        "Kayma sabit değil: dublaj dakikada ~${abs(perMinuteMs)} ms $dir${DubSpeed.slopeHint(r.slope)}. " +
+                            "Şu anki konuma göre ayarlandı (${-lagNow} ms); ilerledikçe yeniden senkronlayın [${r.method.label}]",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
             is DubSyncAnalyzer.Result.Unreliable -> {
                 val reason = if (outcome.windowsUsed == 0) "kaynak okunamadı" else r.reason
                 Log.i(DUB_SYNC_TAG, "unreliable: $reason")
                 // Not remembered: a failed measurement says nothing about the shift.
-                if (!silent) Toast.makeText(context, "Otomatik senkron güvenilir değil, elle ayarlayın ($reason)", Toast.LENGTH_LONG).show()
+                if (!silent) {
+                    // A dub at another speed (25 fps vs 23.976 fps) drifts by minutes: far beyond what the
+                    // windows can see. The two lengths tell. Only now, so a good result costs nothing extra.
+                    val speedNote = coroutineScope {
+                        val videoLength = async {
+                            DubAudioProbe.durationMs(
+                                context,
+                                mediaSourceFactory.createMediaSource(
+                                    context = context,
+                                    url = streamUrl,
+                                    headers = headers,
+                                    filename = filename,
+                                    responseHeaders = responseHeaders,
+                                    mimeTypeOverride = mimeType,
+                                    cacheKey = null,
+                                    externalAudios = emptyList(),
+                                    useDiskCache = false
+                                )
+                            )
+                        }
+                        val dubLength = async {
+                            mediaSourceFactory.createExternalAudioSource(context, audio)
+                                ?.let { DubAudioProbe.durationMs(context, it) }
+                        }
+                        val video = videoLength.await()
+                        val dub = dubLength.await()
+                        if (video != null && dub != null) DubSpeed.explain(dubMs = dub, videoMs = video) else null
+                    }
+                    val suffix = speedNote?.let { " — $it" }.orEmpty()
+                    Toast.makeText(context, "Otomatik senkron güvenilir değil, elle ayarlayın ($reason)$suffix", Toast.LENGTH_LONG).show()
+                }
             }
         }
     }

@@ -50,6 +50,25 @@ videolar, uygulamanın yeniden başlatılması ve güncellemeler arasında aynı
 çalıştırır, **Sağ** tuşu anahtara geçer, anahtarda **Tamam** açıp kapatır. Anahtar yalnızca sonraki videoları etkiler.
 Uzak listedeki `autoSearch: false` ayarı hâlâ geçerlidir; otomatik aramanın çalışması için ikisi de açık olmalı.
 
+## Senkron arama aralığı
+Otomatik ölçüm dublajın orijinalden **±15 saniyeye kadar** kaymış olmasını yakalar (eskiden ±8 sn). Bunun için her
+pencerede dublaj sesi, orijinalden 15 sn önce başlayıp 15 sn sonra biten, toplam 45 sn'lik bir parça olarak okunur;
+orijinal taraf (ağır olan) 15 sn'lik pencere olarak kalır. Dublaj küçük bir ses dosyası olduğundan ek maliyet azdır.
+Kayma sabit değilse (25 ↔ 23.976 fps gibi hız farkı) ölçüm yine güvenilir değil der.
+
+## Hız farkı (kayma sabit değilse)
+Dublaj videodan farklı hızdaysa (ör. 25 fps PAL kaynaklı dublaj, 23.976 fps video: dublaj %4,1 kısa) kayma film boyunca
+büyür ve tek bir gecikmeyle düzelmez. Eklenti bunu iki yolla ayırt eder:
+- **Küçük hız farkı** (24 ↔ 23.976 gibi, yaklaşık %0,1): her pencerenin kendi kayması bulunup konuma göre bir doğru
+  uydurulur. Doğru eğimliyse "Kayma sabit değil" denir ve gecikme **şu anki konuma göre** ayarlanır (yalnızca menüden elle
+  çalıştırınca; otomatik modda dokunulmaz). İlerledikçe yeniden senkronlamak gerekir. Doğru düzse (diğer pencereler
+  gürültüymüş), normal sonuç olarak uygulanır.
+- **Büyük hız farkı** (%4 gibi): kayma ±15 sn aralığının çok dışına çıkar, ölçüm başarısız olur. Bu durumda dublajın ve
+  videonun süreleri ayrıca okunur ve fark mesajda gösterilir ("dublaj videodan 5 dk 3 sn kısa … 25 fps hızında olabilir").
+  Süre farkı farklı kurgudan da gelebileceği için ifade "olabilir" şeklindedir.
+
+Sesi hızlandırıp yavaşlatarak (zaman uzatma, perde korunarak) bu farkı gidermek henüz yok.
+
 ## Nasıl güncellenir?
 - Her gün otomatik kontrol edilir. İş akışı Nuvio'nun **en son yayınlanan sürümüne** (Releases) bakar.
   Nuvio yeni bir sürüm yayınlamadıysa ve `dub-addon/` değişmediyse derleme atlanır. Ara commit'ler yeni APK üretmez.
