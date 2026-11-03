@@ -42,13 +42,18 @@ jobs:
         working-directory: fork
         run: |
           last="$(gh api "repos/${GITHUB_REPOSITORY}/branches/keepalive" --jq '.commit.commit.committer.date' 2>/dev/null || true)"
+          # Dal yoksa gh 404 JSON'unu stdout'a yazar; tarih gibi görünmüyorsa boş say.
+          case "$last" in
+            [0-9][0-9][0-9][0-9]-[0-9][0-9]-*) ;;
+            *) last="" ;;
+          esac
           if [ -z "$last" ] || [ $(( ( $(date +%s) - $(date -d "$last" +%s) ) / 86400 )) -ge 30 ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git checkout -q --orphan keepalive
-            git rm -rf -q . 2>/dev/null || true
-            git commit -q --allow-empty -m "keepalive $(date -u +%F)"
-            git push -q -f origin keepalive || echo "::warning::keepalive dalı gönderilemedi"
+            # Çalışma dizinine/HEAD'e dokunmadan (dub-addon dosyaları silinmesin) boş commit gönder.
+            export GIT_AUTHOR_NAME="github-actions[bot]" GIT_COMMITTER_NAME="github-actions[bot]"
+            export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" GIT_COMMITTER_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+            empty_tree="$(git mktree </dev/null)"
+            commit="$(git commit-tree "$empty_tree" -m "keepalive $(date -u +%F)")"
+            git push -q -f origin "${commit}:refs/heads/keepalive" || echo "::warning::keepalive dalı gönderilemedi"
           fi
 
       - name: Nuvio'nun en son yayınlanan sürümü
