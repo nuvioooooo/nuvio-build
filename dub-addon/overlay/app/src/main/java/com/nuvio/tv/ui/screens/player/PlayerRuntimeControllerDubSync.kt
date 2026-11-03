@@ -8,6 +8,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.media3.common.C
 import com.nuvio.tv.core.dub.DubAudioProbe
+import com.nuvio.tv.core.dub.DubAutoSettings
 import com.nuvio.tv.core.dub.DubSyncAnalyzer
 import com.nuvio.tv.core.dub.ProbeCapture
 import com.nuvio.tv.domain.model.ExternalAudio
@@ -21,15 +22,6 @@ import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
 private const val DUB_SYNC_TAG = "DubSync"
-
-/**
- * true: a dub without a fixed `audioDelayMs` in the recipe and without a remembered result is
- * measured automatically right after it is attached. Off by default because the measurement reads
- * several short stretches of the ORIGINAL stream (video included, for interleaved files: for a 4K
- * remux that is tens of MB per stretch). The audio menu entry "Dublajı senkronla" always works,
- * and a result that was measured once is remembered and applied automatically next time.
- */
-private const val DUB_AUTO_SYNC_AFTER_ATTACH = false
 
 /**
  * Length of one stretch. Short on purpose: the cost is the download of the original, and many
@@ -84,7 +76,9 @@ internal fun PlayerRuntimeController.syncDubAudio() {
 /**
  * Hook for [attachExternalAudios]. A dub with a fixed delay in the recipe is left alone. A result
  * that was measured before for this exact video file and this dub is applied right away.
- * Otherwise nothing happens unless [DUB_AUTO_SYNC_AFTER_ATTACH] is on.
+ * Otherwise nothing happens unless the "Dublajı otomatik senkronla" switch in the audio menu is on
+ * (off by default: measuring reads several short stretches of the original stream, tens of MB each
+ * for a 4K remux). The menu entry itself always works.
  */
 internal fun PlayerRuntimeController.maybeAutoSyncDub(audio: ExternalAudio) {
     if (audio.audioDelayMs != null) return
@@ -94,7 +88,7 @@ internal fun PlayerRuntimeController.maybeAutoSyncDub(audio: ExternalAudio) {
         if (remembered != 0) applyMeasuredDubDelay(remembered, audio.lang)
         return
     }
-    if (DUB_AUTO_SYNC_AFTER_ATTACH) startDubSync(audio, silent = true)
+    if (DubAutoSettings.isAutoSyncEnabled(context)) startDubSync(audio, silent = true)
 }
 
 /** Same video file (name and size, because releases differ) + same dub source = same shift. */

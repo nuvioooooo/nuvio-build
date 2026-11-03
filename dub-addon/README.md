@@ -37,6 +37,19 @@ Nuvio (NuvioMedia/NuvioTV) ──► [her gün 03:17 UTC] ──► son kod + du
 5. **Telefona/TV'ye bir kez elle kur.** İmza anahtarı farklı olduğu için daha önce kurduğun test sürümünü
    önce kaldırman gerekebilir. Bundan sonrası uygulama içinden güncellenir.
 
+## Otomatik arama ve otomatik senkron anahtarları
+Oynatıcıda **Ses** menüsünde iki satırın sağında birer anahtar (Açık/Kapalı) vardır:
+
+| Satır | Satıra basınca | Anahtar |
+|---|---|---|
+| Türkçe dublaj ara | Dublajı hemen arar | Video açılınca dublajın kendiliğinden aranması (varsayılan **Açık**) |
+| Dublajı otomatik senkronla | Seçili dublajı hemen ölçer | Dublaj eklenince senkronun kendiliğinden ölçülmesi (varsayılan **Kapalı**) |
+
+Seçim cihazda saklanır (`nuvio_dub` / `auto_search_enabled`, `auto_sync_enabled`) ve sen değiştirene kadar
+videolar, uygulamanın yeniden başlatılması ve güncellemeler arasında aynı kalır. Kumandada: satırda **Tamam** işlemi
+çalıştırır, **Sağ** tuşu anahtara geçer, anahtarda **Tamam** açıp kapatır. Anahtar yalnızca sonraki videoları etkiler.
+Uzak listedeki `autoSearch: false` ayarı hâlâ geçerlidir; otomatik aramanın çalışması için ikisi de açık olmalı.
+
 ## Nasıl güncellenir?
 - Her gün otomatik kontrol edilir. İş akışı Nuvio'nun **en son yayınlanan sürümüne** (Releases) bakar.
   Nuvio yeni bir sürüm yayınlamadıysa ve `dub-addon/` değişmediyse derleme atlanır. Ara commit'ler yeni APK üretmez.

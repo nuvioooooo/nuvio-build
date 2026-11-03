@@ -4,6 +4,7 @@ package com.nuvio.tv.ui.screens.player
 
 import android.util.Log
 import android.widget.Toast
+import com.nuvio.tv.core.dub.DubAutoSettings
 import com.nuvio.tv.core.dub.DubOutcome
 import com.nuvio.tv.core.dub.DubRequest
 import com.nuvio.tv.core.dub.DubSourceManager
@@ -19,6 +20,8 @@ private const val DUB_SEARCH_TAG = "DubSearch"
  * silent unless a dub is found.
  */
 internal fun PlayerRuntimeController.searchDubAudio(manual: Boolean) {
+    // The "Türkçe dublaj ara" switch in the audio menu: off = never search by itself (no network).
+    if (!manual && !DubAutoSettings.isAutoSearchEnabled(context)) return
     if (_exoPlayer == null) {
         if (manual) Toast.makeText(context, "Harici ses sadece ExoPlayer ile eklenebilir", Toast.LENGTH_LONG).show()
         return
