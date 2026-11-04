@@ -1,0 +1,24 @@
+diff --git a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeController.kt b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeController.kt
+index 67c4c6972..69fb67938 100644
+--- a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeController.kt
++++ b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeController.kt
+@@ -237,6 +237,10 @@ class PlayerRuntimeController(
+     internal var currentStreamMimeType: String?
+     internal var currentHeaders: Map<String, String>
+     internal var streamSubtitles: List<Subtitle> = emptyList()
++    internal var streamExternalAudios: List<com.nuvio.tv.domain.model.ExternalAudio> = emptyList()
++    internal var dubSearchJob: kotlinx.coroutines.Job? = null
++    internal var dubSyncJob: kotlinx.coroutines.Job? = null
++    internal var dubAutoSearchStarted = false
+ 
+     init {
+         val initialPlaybackRequest = PlayerMediaSourceFactory.normalizePlaybackRequest(
+@@ -252,6 +256,8 @@ class PlayerRuntimeController(
+         currentHeaders = initialPlaybackRequest.headers
+         streamSubtitles = StreamSidecarSubtitles.forUrl(initialStreamUrl)
+             .ifEmpty { StreamSidecarSubtitles.forUrl(currentStreamUrl) }
++        streamExternalAudios = StreamSidecarAudio.forUrl(initialStreamUrl)
++            .ifEmpty { StreamSidecarAudio.forUrl(currentStreamUrl) }
+     }
+ 
+     fun getCurrentStreamUrl(): String = currentStreamUrl
