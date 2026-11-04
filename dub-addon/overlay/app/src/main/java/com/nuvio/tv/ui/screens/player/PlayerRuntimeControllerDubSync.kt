@@ -7,6 +7,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
 import androidx.media3.common.C
+import androidx.media3.common.Player
 import com.nuvio.tv.core.dub.DubAudioProbe
 import com.nuvio.tv.core.dub.DubAutoSettings
 import com.nuvio.tv.core.dub.DubSpeed
@@ -19,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -70,6 +72,37 @@ private const val SYNC_IGNORE_BELOW_MS = 40
 /** Subtitle-only results are accurate to roughly +-150 ms; smaller corrections would be noise. */
 private const val SYNC_IGNORE_BELOW_MS_COARSE = 100
 
+/** How long a run waits for the player to know the film's length (it is unknown right after a rebuild). */
+private const val DURATION_WAIT_MS = 20_000L
+
+/** How long a stretched run waits for the rebuilt player to be ready before it applies its result. */
+private const val READY_WAIT_MS = 15_000L
+
+/**
+ * The film's length. Right after the media source is rebuilt (the dub was just stretched, a dub was
+ * just attached) [Player.getDuration] is TIME_UNSET for a while; a run that started then used to give
+ * up silently. [fallbackMs] (the length seen before the rebuild) is used at once when the player does
+ * not know it yet, otherwise the player is waited for. Null: still unknown.
+ */
+private suspend fun awaitFilmDuration(player: Player, fallbackMs: Long?): Long? {
+    val deadline = SystemClock.elapsedRealtime() + DURATION_WAIT_MS
+    while (true) {
+        val d = player.duration
+        if (d != C.TIME_UNSET && d > 0L) return d
+        if (fallbackMs != null && fallbackMs > 0L) return fallbackMs
+        if (SystemClock.elapsedRealtime() >= deadline) return null
+        delay(250)
+    }
+}
+
+/** After a rebuild the new tracks are selected once the player is ready; the delay is applied to those. */
+private suspend fun awaitPlayerReady(player: Player) {
+    val deadline = SystemClock.elapsedRealtime() + READY_WAIT_MS
+    while (player.playbackState != Player.STATE_READY && SystemClock.elapsedRealtime() < deadline) delay(250)
+}
+
+private fun directionText(lagMs: Int) = if (lagMs > 0) "geç" else "erken"
+
 /** Audio menu entry: measures the dub that is currently selected. */
 internal fun PlayerRuntimeController.syncDubAudio() {
     val player = _exoPlayer
@@ -102,6 +135,16 @@ internal fun PlayerRuntimeController.maybeAutoSyncDub(audio: ExternalAudio) {
     if (remembered != null) {
         Log.i(DUB_SYNC_TAG, "remembered delay for this video and dub: ${remembered}ms")
         if (remembered != 0) applyMeasuredDubDelay(remembered, audio.lang)
+        // The result is shown like a fresh measurement, so it is clear what was done (also in auto mode).
+        Toast.makeText(
+            context,
+            if (remembered != 0) {
+                "Dublaj ${abs(remembered)} ms ${directionText(-remembered)} kalıyordu, düzeltildi [kayıtlı sonuç]"
+            } else {
+                "Dublaj zaten senkronda [kayıtlı sonuç]"
+            },
+            Toast.LENGTH_LONG
+        ).show()
         return
     }
     if (DubAutoSettings.isAutoSyncEnabled(context)) startDubSync(audio, silent = true)
@@ -144,23 +187,26 @@ private fun PlayerRuntimeController.stretchAndResync(audio: ExternalAudio, known
             "kalan kayma ölçülecek…",
         Toast.LENGTH_LONG
     ).show()
+    // Taken BEFORE the rebuild: right after it the player does not know the length for a while, and the
+    // follow-up measurement used to give up on that without a word (until it was started by hand again).
+    val filmMs = _exoPlayer?.duration?.takeIf { it != C.TIME_UNSET && it > 0L }
     val stretched = applyDubStretch(audio, known)
     if (stretched != null) {
         // This job is done; a new one measures the stretched dub.
         dubSyncJob = null
-        startDubSync(stretched, silent = false, autoStretched = true)
+        startDubSync(stretched, silent = false, autoStretched = true, knownDurationMs = filmMs)
     }
 }
 
-private fun PlayerRuntimeController.startDubSync(audio: ExternalAudio, silent: Boolean, autoStretched: Boolean = false) {
+private fun PlayerRuntimeController.startDubSync(
+    audio: ExternalAudio,
+    silent: Boolean,
+    autoStretched: Boolean = false,
+    knownDurationMs: Long? = null
+) {
     val player = _exoPlayer ?: return
     if (dubSyncJob?.isActive == true) {
         if (!silent) Toast.makeText(context, "Senkron ölçümü zaten çalışıyor…", Toast.LENGTH_SHORT).show()
-        return
-    }
-    val durationMs = player.duration
-    if (durationMs == C.TIME_UNSET || durationMs < SYNC_MIN_DURATION_MS) {
-        if (!silent) Toast.makeText(context, "Otomatik senkron için içerik çok kısa ya da süre bilinmiyor", Toast.LENGTH_LONG).show()
         return
     }
     // Everything the probes need is captured now: the user may change stream while this runs.
@@ -172,9 +218,19 @@ private fun PlayerRuntimeController.startDubSync(audio: ExternalAudio, silent: B
     val memoryKey = syncMemoryKey(audio)
     // A dub that is being stretched is read in its own time; its captures are put back on the film's time grid.
     val stretch = audio.stretchRatio
-    if (!silent) Toast.makeText(context, "Dublaj senkronu ölçülüyor… (yaklaşık 1 dk)", Toast.LENGTH_LONG).show()
+    Toast.makeText(
+        context,
+        if (silent) "Dublaj otomatik senkronlanıyor… (yaklaşık 1 dk)" else "Dublaj senkronu ölçülüyor… (yaklaşık 1 dk)",
+        Toast.LENGTH_LONG
+    ).show()
 
     dubSyncJob = scope.launch {
+        val durationMs = awaitFilmDuration(player, knownDurationMs)
+        if (durationMs == null || durationMs < SYNC_MIN_DURATION_MS) {
+            Log.i(DUB_SYNC_TAG, "not measured: film duration=$durationMs")
+            if (!silent) Toast.makeText(context, "Otomatik senkron için içerik çok kısa ya da süre bilinmiyor", Toast.LENGTH_LONG).show()
+            return@launch
+        }
         // A manual run on a dub that is not stretched yet: its length (a tiny header read, in parallel
         // with the first window) is compared with the video's length the first window reports. A known
         // speed difference (PAL 25 fps vs 23.976 fps) is then found after ONE window, instead of after
@@ -316,21 +372,30 @@ private fun PlayerRuntimeController.startDubSync(audio: ExternalAudio, silent: B
             return@launch
         }
 
+        // A run that follows a stretch: the player was rebuilt a moment ago. Let it settle (and select
+        // the dub again) so the delay lands on the right track.
+        if (autoStretched) awaitPlayerReady(player)
+        // What the stretch did, said once more together with the result so it is confirmed on screen.
+        val stretchNote = if (autoStretched && DubStretch.isOn(audio.stretchRatio)) {
+            "Hız farkı giderildi (dublaj %${DubStretch.percentText(audio.stretchRatio)} " +
+                "${if (audio.stretchRatio < 1.0) "yavaşlatıldı" else "hızlandırıldı"}). "
+        } else ""
+
         when (val r = outcome.result) {
             is DubSyncAnalyzer.Result.Ok -> {
                 val ignoreBelow = if (r.precise) SYNC_IGNORE_BELOW_MS else SYNC_IGNORE_BELOW_MS_COARSE
                 if (abs(r.lagMs) < ignoreBelow) {
                     DubSyncMemory.put(context, memoryKey, 0)
-                    Toast.makeText(context, "Dublaj zaten senkronda (${r.lagMs} ms)", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "${stretchNote}Dublaj zaten senkronda (${r.lagMs} ms)", Toast.LENGTH_LONG).show()
                 } else {
                     // Dub plays later than the original -> the audio has to come earlier: negative delay.
                     applyMeasuredDubDelay(-r.lagMs, audio.lang)
                     DubSyncMemory.put(context, memoryKey, -r.lagMs)
-                    val dir = if (r.lagMs > 0) "geç" else "erken"
+                    val dir = directionText(r.lagMs)
                     val note = if (r.precise) "" else " (yaklaşık; gerekirse elle ince ayar yapın)"
                     Toast.makeText(
                         context,
-                        "Dublaj ${abs(r.lagMs)} ms $dir kalıyordu, düzeltildi$note [${r.method.label}, ${outcome.elapsedMs / 1000} sn]",
+                        "${stretchNote}Dublaj ${abs(r.lagMs)} ms $dir kalıyordu, düzeltildi$note [${r.method.label}, ${outcome.elapsedMs / 1000} sn]",
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -340,14 +405,21 @@ private fun PlayerRuntimeController.startDubSync(audio: ExternalAudio, silent: B
                 val perMinuteMs = Math.round(r.slope * 60_000).toInt()
                 val lagNow = r.lagAtMs(player.currentPosition)
                 Log.i(DUB_SYNC_TAG, "drift: slope=${r.slope} offset=${r.offsetMs}ms lagNow=${lagNow}ms inliers=${r.inliers}/${r.windows}")
-                // Only when asked for: a silent automatic run must not change anything on a guess.
+                val dir = if (r.slope < 0) "öne kayıyor (dublaj hızlı)" else "geride kalıyor (dublaj yavaş)"
+                val head = "Kayma sabit değil: dublaj dakikada ~${abs(perMinuteMs)} ms $dir${DubSpeed.slopeHint(r.slope)}"
                 if (!silent) {
                     if (abs(lagNow) >= SYNC_IGNORE_BELOW_MS_COARSE) applyMeasuredDubDelay(-lagNow, audio.lang)
-                    val dir = if (r.slope < 0) "öne kayıyor (dublaj hızlı)" else "geride kalıyor (dublaj yavaş)"
                     Toast.makeText(
                         context,
-                        "Kayma sabit değil: dublaj dakikada ~${abs(perMinuteMs)} ms $dir${DubSpeed.slopeHint(r.slope)}. " +
-                            "Şu anki konuma göre ayarlandı (${-lagNow} ms); ilerledikçe yeniden senkronlayın [${r.method.label}]",
+                        "$head. Şu anki konuma göre ayarlandı (${-lagNow} ms); ilerledikçe yeniden senkronlayın [${r.method.label}]",
+                        Toast.LENGTH_LONG
+                    ).show()
+                } else {
+                    // A silent automatic run must not change anything on a guess, but the result is shown.
+                    Toast.makeText(
+                        context,
+                        "$head. Otomatik modda değiştirilmedi (şu an ${abs(lagNow)} ms ${directionText(lagNow)}); " +
+                            "ayarlamak için menüden \"Dublajı otomatik senkronla\"ya basın",
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -362,7 +434,7 @@ private fun PlayerRuntimeController.startDubSync(audio: ExternalAudio, silent: B
                     return@launch
                 }
                 // Not remembered: a failed measurement says nothing about the shift.
-                if (!silent) {
+                run {
                     // A dub at another speed (25 fps vs 23.976 fps) drifts by minutes: far beyond what the
                     // windows can see. The two lengths tell. Only now, so a good result costs nothing extra.
                     val lengths = coroutineScope {
@@ -401,12 +473,24 @@ private fun PlayerRuntimeController.startDubSync(audio: ExternalAudio, silent: B
                         null
                     }
                     if (known != null) {
-                        stretchAndResync(audio, known, dub, video)
+                        if (silent) {
+                            // Automatic mode never stretches on its own; it says what it found instead.
+                            val shorter = known < 1.0
+                            Toast.makeText(
+                                context,
+                                "Dublaj videodan %${DubStretch.percentText(known)} ${if (shorter) "kısa" else "uzun"}: hız farkı bulundu. " +
+                                    "Düzeltmek için menüden \"Dublajı otomatik senkronla\"ya basın",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        } else {
+                            stretchAndResync(audio, known, dub, video)
+                        }
                         return@launch
                     }
                     val speedNote = if (video != null && dub != null) DubSpeed.explain(dubMs = dub, videoMs = video) else null
                     val suffix = speedNote?.let { " — $it" }.orEmpty()
-                    Toast.makeText(context, "Otomatik senkron güvenilir değil, elle ayarlayın ($reason)$suffix", Toast.LENGTH_LONG).show()
+                    val tail = if (silent) "menüden \"Dublajı otomatik senkronla\"ya basın ya da elle ayarlayın" else "elle ayarlayın"
+                    Toast.makeText(context, "Otomatik senkron güvenilir değil, $tail ($reason)$suffix", Toast.LENGTH_LONG).show()
                 }
             }
         }
