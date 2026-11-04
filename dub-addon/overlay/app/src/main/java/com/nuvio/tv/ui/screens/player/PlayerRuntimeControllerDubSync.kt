@@ -234,8 +234,8 @@ private fun PlayerRuntimeController.startDubSync(
         // A manual run on a dub that is not stretched yet: its length (a tiny header read, in parallel
         // with the first window) is compared with the video's length the first window reports. A known
         // speed difference (PAL 25 fps vs 23.976 fps) is then found after ONE window, instead of after
-        // all windows have failed. An automatic run never stretches anything on a guess.
-        val speedCheck = !silent && !DubStretch.isOn(audio.stretchRatio)
+        // all windows have failed. Only a KNOWN speed pair is ever stretched, in automatic runs too.
+        val speedCheck = !DubStretch.isOn(audio.stretchRatio)
         val dubLengthJob: Deferred<Long?>? = if (speedCheck) {
             async {
                 mediaSourceFactory.createExternalAudioSource(context, audio)
@@ -407,22 +407,13 @@ private fun PlayerRuntimeController.startDubSync(
                 Log.i(DUB_SYNC_TAG, "drift: slope=${r.slope} offset=${r.offsetMs}ms lagNow=${lagNow}ms inliers=${r.inliers}/${r.windows}")
                 val dir = if (r.slope < 0) "öne kayıyor (dublaj hızlı)" else "geride kalıyor (dublaj yavaş)"
                 val head = "Kayma sabit değil: dublaj dakikada ~${abs(perMinuteMs)} ms $dir${DubSpeed.slopeHint(r.slope)}"
-                if (!silent) {
-                    if (abs(lagNow) >= SYNC_IGNORE_BELOW_MS_COARSE) applyMeasuredDubDelay(-lagNow, audio.lang)
-                    Toast.makeText(
-                        context,
-                        "$head. Şu anki konuma göre ayarlandı (${-lagNow} ms); ilerledikçe yeniden senkronlayın [${r.method.label}]",
-                        Toast.LENGTH_LONG
-                    ).show()
-                } else {
-                    // A silent automatic run must not change anything on a guess, but the result is shown.
-                    Toast.makeText(
-                        context,
-                        "$head. Otomatik modda değiştirilmedi (şu an ${abs(lagNow)} ms ${directionText(lagNow)}); " +
-                            "ayarlamak için menüden \"Dublajı otomatik senkronla\"ya basın",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
+                // Applied in automatic runs too, exactly like a manual one.
+                if (abs(lagNow) >= SYNC_IGNORE_BELOW_MS_COARSE) applyMeasuredDubDelay(-lagNow, audio.lang)
+                Toast.makeText(
+                    context,
+                    "$head. Şu anki konuma göre ayarlandı (${-lagNow} ms); ilerledikçe yeniden senkronlayın [${r.method.label}]",
+                    Toast.LENGTH_LONG
+                ).show()
             }
             is DubSyncAnalyzer.Result.Unreliable -> {
                 val reason = if (outcome.windowsUsed == 0) "kaynak okunamadı" else r.reason
@@ -473,23 +464,12 @@ private fun PlayerRuntimeController.startDubSync(
                         null
                     }
                     if (known != null) {
-                        if (silent) {
-                            // Automatic mode never stretches on its own; it says what it found instead.
-                            val shorter = known < 1.0
-                            Toast.makeText(
-                                context,
-                                "Dublaj videodan %${DubStretch.percentText(known)} ${if (shorter) "kısa" else "uzun"}: hız farkı bulundu. " +
-                                    "Düzeltmek için menüden \"Dublajı otomatik senkronla\"ya basın",
-                                Toast.LENGTH_LONG
-                            ).show()
-                        } else {
-                            stretchAndResync(audio, known, dub, video)
-                        }
+                        stretchAndResync(audio, known, dub, video)
                         return@launch
                     }
                     val speedNote = if (video != null && dub != null) DubSpeed.explain(dubMs = dub, videoMs = video) else null
                     val suffix = speedNote?.let { " — $it" }.orEmpty()
-                    val tail = if (silent) "menüden \"Dublajı otomatik senkronla\"ya basın ya da elle ayarlayın" else "elle ayarlayın"
+                    val tail = "elle ayarlayın"
                     Toast.makeText(context, "Otomatik senkron güvenilir değil, $tail ($reason)$suffix", Toast.LENGTH_LONG).show()
                 }
             }
