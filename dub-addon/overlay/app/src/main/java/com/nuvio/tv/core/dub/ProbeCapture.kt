@@ -16,7 +16,9 @@ internal class ProbeCapture(
      * no usable embedded text track. Subtitles that were downloaded from add-ons are never used.
      */
     val cueActivity: FloatArray?,
-    val frames: Int
+    val frames: Int,
+    /** Length of the probed source as its header reports it (ms), -1 when unknown. Free: the probe has it anyway. */
+    val sourceDurationMs: Long = -1L
 ) {
     companion object {
         const val BAND_FULL = 0

@@ -201,6 +201,9 @@ internal object DubAudioProbe {
             }
 
             val ok = withTimeoutOrNull(timeoutMs) { done.await() } ?: false
+            val sourceDurationMs = withContext(Dispatchers.Main) {
+                player?.duration?.takeIf { it != C.TIME_UNSET && it > 0L } ?: -1L
+            }
             val bands = sink.snapshot()?.takeIf { it[0].size >= DubSyncAnalyzer.MIN_USABLE_FRAMES }
             // Cues are only trustworthy when the window was read to its end.
             val cueArray = if (ok && cues?.trackChosen == true) cues.snapshot() else null
@@ -211,7 +214,7 @@ internal object DubAudioProbe {
                     "subtitleTrack=${cues?.trackChosen}"
             )
             if (bands == null && cueArray == null) null
-            else ProbeCapture(bands, cueArray, bands?.get(0)?.size ?: targetFrames)
+            else ProbeCapture(bands, cueArray, bands?.get(0)?.size ?: targetFrames, sourceDurationMs)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {

@@ -52,6 +52,21 @@ internal object DubSpeed {
         }
     }
 
+    /**
+     * The exact ratio (length of the dub / length of the film) when the two lengths differ by one of
+     * the [KNOWN] speed changes, else null: a different cut or an extra part is never "stretched".
+     * The nominal ratio of the matching pair is returned, not the measured one, which also holds
+     * extra silence at the ends.
+     */
+    fun knownRatio(dubMs: Long, videoMs: Long): Double? {
+        if (dubMs <= 0L || videoMs <= 0L) return null
+        val ratio = dubMs.toDouble() / videoMs
+        if (abs(ratio - 1.0) < SAME_BELOW) return null
+        return KNOWN.minByOrNull { abs(ratio - it.ratio) }
+            ?.takeIf { abs(ratio - it.ratio) / it.ratio < MATCH_TOLERANCE }
+            ?.ratio
+    }
+
     /** A hint for a measured slope (ms of lag per ms of film), empty when it matches nothing known. */
     fun slopeHint(slope: Double): String =
         if (abs(abs(slope) - 0.001) < 0.0004) " (24 ↔ 23.976 ya da 30 ↔ 29.97 fps farkına benziyor)" else ""

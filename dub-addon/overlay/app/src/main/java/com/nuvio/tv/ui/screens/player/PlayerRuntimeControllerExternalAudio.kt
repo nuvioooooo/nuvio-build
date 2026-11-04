@@ -22,7 +22,7 @@ private const val TRACK_WAIT_MS = 20_000L
 /** Stop listening for tracks altogether after this long (bad URL, unsupported stream). */
 private const val TRACK_GIVE_UP_MS = 45_000L
 
-private typealias AudioCandidate = Triple<Tracks.Group, Int, Format>
+internal typealias AudioCandidate = Triple<Tracks.Group, Int, Format>
 
 /**
  * Manually attaches an audio-only URL (for example a Turkish dub) to the current stream.
@@ -81,7 +81,7 @@ internal fun PlayerRuntimeController.attachExternalAudios(audios: List<ExternalA
     // Signed URLs change on every search, so the provider is the identity of a dub; a manually
     // typed URL falls back to the URL without its query.
     val knownKeys = streamExternalAudios.map { audioIdentity(it) }.toHashSet()
-    val fresh = audios.filter { knownKeys.add(audioIdentity(it)) }
+    val fresh = audios.map { withRememberedStretch(it) }.filter { knownKeys.add(audioIdentity(it)) }
     if (fresh.isEmpty()) {
         Toast.makeText(context, "Bulunan ses zaten ekli", Toast.LENGTH_SHORT).show()
         return
@@ -191,7 +191,7 @@ internal fun PlayerRuntimeController.attachExternalAudios(audios: List<ExternalA
     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
 }
 
-private fun PlayerRuntimeController.rebuildMediaSource(position: Long, playWhenReady: Boolean) {
+internal fun PlayerRuntimeController.rebuildMediaSource(position: Long, playWhenReady: Boolean) {
     val player = _exoPlayer ?: return
     player.setMediaSource(
         mediaSourceFactory.createMediaSource(
@@ -226,10 +226,10 @@ private fun PlayerRuntimeController.applyDubAudioDelay(delayMs: Int, lang: Strin
 private fun audioIdentity(audio: ExternalAudio): String =
     audio.sourceId?.let { "src:$it" } ?: audio.url.substringBefore('#').substringBefore('?')
 
-private fun wantedLang(audio: ExternalAudio): String = audio.lang.lowercase().ifBlank { "tr" }
+internal fun wantedLang(audio: ExternalAudio): String = audio.lang.lowercase().ifBlank { "tr" }
 
 /** Every audio rendition that belongs to the external source at MergingMediaSource [childIndex]. */
-private fun audioCandidates(tracks: Tracks, childIndex: Int): List<AudioCandidate> {
+internal fun audioCandidates(tracks: Tracks, childIndex: Int): List<AudioCandidate> {
     val out = mutableListOf<AudioCandidate>()
     for (group in tracks.groups) {
         if (group.type != C.TRACK_TYPE_AUDIO) continue
@@ -245,7 +245,7 @@ private fun audioCandidates(tracks: Tracks, childIndex: Int): List<AudioCandidat
  * Order: language tag or label matches [wantLang]; else a track that is not marked as another
  * known language (so an English track is never picked as "Turkish" by accident); else the first.
  */
-private fun pickDubTrack(candidates: List<AudioCandidate>, wantLang: String): AudioCandidate {
+internal fun pickDubTrack(candidates: List<AudioCandidate>, wantLang: String): AudioCandidate {
     val want = wantLang.take(2)
     val wantNames = if (want == "tr") listOf("türk", "turk", "turkish", "tr", "tur") else listOf(wantLang)
     fun lang(f: Format) = f.language?.lowercase().orEmpty()
