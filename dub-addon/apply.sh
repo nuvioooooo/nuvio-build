@@ -42,6 +42,34 @@ if [ "$failed" -ne 0 ] || grep -rIl --include='*.kt' -E '^(<<<<<<<|>>>>>>>) ' ap
   exit 2
 fi
 
+# --- 2b) Zaman uzatma bağlantıları: tek satırlık değişiklikler, satır numarasına bağlı olmasın diye
+#         yama yerine tam metin değişimiyle yapılır (upstream o satırı değiştirirse net hata verir).
+python3 - <<'PYEOF'
+import sys
+P = "app/src/main/java/com/nuvio/tv/ui/screens/player/"
+edits = [
+  (P + "PlayerMediaSourceFactory.kt",
+   "        val audioSources = externalAudios.mapNotNull { createExternalAudioSource(context, it) }\n",
+   "        // Bir dublaj başka hızdaysa (25 fps PAL / 23.976 fps film) film zamanına çevrilir; sesi\n"
+   "        // DubStretchAudioSink uzatır. Normal dublaja dokunulmaz.\n"
+   "        val audioSources = externalAudios.mapNotNull { audio ->\n"
+   "            createExternalAudioSource(context, audio)\n"
+   "                ?.let { DubStretchMediaSource.wrapIfNeeded(it, audio.stretchRatio) }\n"
+   "        }\n"),
+  (P + "PlayerRuntimeControllerInitialization.kt",
+   "        val baseAudioSink = builder.build()\n",
+   "        // Başka hızda yapılmış dublajı uzatır; diğer tüm sesler olduğu gibi geçer.\n"
+   "        val baseAudioSink = DubStretchAudioSink(builder.build())\n"),
+]
+for path, old, new in edits:
+    s = open(path, encoding="utf-8").read()
+    if s.count(old) != 1:
+        print("::error::zaman uzatma bağlantısı yerleştirilemedi (%d eşleşme): %s" % (s.count(old), path))
+        sys.exit(6)
+    open(path, "w", encoding="utf-8").write(s.replace(old, new))
+print("zaman uzatma bağlantıları yerleştirildi")
+PYEOF
+
 # --- 3) Güncelleyiciyi bu forka yönlendir + sürüm numarası ----------------------------
 GRADLE=app/build.gradle.kts
 base_name="$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)".*/\1/p' "$GRADLE" | head -1)"

@@ -63,11 +63,37 @@ büyür ve tek bir gecikmeyle düzelmez. Eklenti bunu iki yolla ayırt eder:
   uydurulur. Doğru eğimliyse "Kayma sabit değil" denir ve gecikme **şu anki konuma göre** ayarlanır (yalnızca menüden elle
   çalıştırınca; otomatik modda dokunulmaz). İlerledikçe yeniden senkronlamak gerekir. Doğru düzse (diğer pencereler
   gürültüymüş), normal sonuç olarak uygulanır.
-- **Büyük hız farkı** (%4 gibi): kayma ±15 sn aralığının çok dışına çıkar, ölçüm başarısız olur. Bu durumda dublajın ve
-  videonun süreleri ayrıca okunur ve fark mesajda gösterilir ("dublaj videodan 5 dk 3 sn kısa … 25 fps hızında olabilir").
-  Süre farkı farklı kurgudan da gelebileceği için ifade "olabilir" şeklindedir.
+- **Büyük hız farkı** (PAL %4,1 gibi): kayma ±15 sn aralığının çok dışına çıkar, ölçüm başarısız olur. Bu durumda dublajın ve
+  videonun süreleri ayrıca okunur. Fark **bilinen bir hız değişimiyle** (23.976 ↔ 25 ya da 24 ↔ 25 fps) örtüşüyorsa dublaj
+  otomatik olarak yavaşlatılır (ya da hızlandırılır) ve geriye kalan sabit kayma yeniden ölçülür (aşağıya bakın).
+  Örtüşmüyorsa (farklı kurgu, fazladan bölüm olabilir) hiçbir şey uygulanmaz; yalnızca fark mesajda gösterilir.
 
-Sesi hızlandırıp yavaşlatarak (zaman uzatma, perde korunarak) bu farkı gidermek henüz yok.
+## Dublajı yavaşlatma / hızlandırma (zaman uzatma)
+Yalnızca menüden elle çalıştırılan senkronda (otomatik mod tahmin üzerine bir şey değiştirmez) ve süre oranı bilinen bir hız
+farkıyla örtüşünce devreye girer. Üç parça birlikte çalışır:
+- `DubStretchMediaSource`: dublaj kaynağının zaman çizgisini film zamanına çevirir (dublaj zamanı = film zamanı × oran).
+  Sarma (seek) doğru dublaj konumuna düşer, birleşik süre filmin süresi olur. Dublajın ses biçimini `DubStretchTag` ile işaretler.
+- `DubStretchAudioSink`: işaretli sesi oranın tersiyle, perdeyi koruyarak (Media3 `SonicAudioProcessor`) uzatır. Gerçek ses
+  çıkışına yalnızca film uzunluğunda ses girer; saat ve video bozulmaz. Başka hiçbir ses etkilenmez. Yalnızca 16-bit PCM
+  uzatılır; AC-3/E-AC-3 dublaj bu durumda geçişle değil PCM'e çözülerek çalınır.
+- `DubSpeed.knownRatio`: oranı yalnızca bilinen hız çiftlerinden birine uyuyorsa verir.
+
+Oran video + dublaj çifti için cihazda hatırlanır (`dub_stretch_memory`); sonraki açılışta dublaj baştan uzatılmış gelir.
+Uzatılmış dublajın ölçümünde dublaj penceresi kendi zamanında okunur ve film zaman ızgarasına yeniden örneklenir
+(`DubStretch.toFilmTime`), böylece analiz kodu değişmeden çalışır.
+
+Bağlantı noktaları `apply.sh` içinde (adım 2b) tam metin değişimiyle yapılır: `PlayerMediaSourceFactory` ve
+`PlayerRuntimeControllerInitialization` içinde birer satır. Upstream bu satırları değiştirirse derleme net bir hatayla durur.
+
+**Senkron süresi.** Hız farkı artık ilk pencerede anlaşılır: dublajın süresi (küçük bir başlık okuması, ilk pencereyle paralel)
+ile ilk pencerenin zaten bildiği video süresi karşılaştırılır; bilinen bir oranla örtüşüyorsa kalan pencereler hiç okunmaz,
+dublaj uzatılıp kalan kayma ölçülür. Ek video açılışı ya da ek indirme yoktur. Uzatmadan sonra ölçüm güvenilmezse uzatma
+geri alınır. Sarmada `MergingMediaPeriod`'un istediği tam konum eşitliği `DubStretchMediaSource` içinde korunur.
+
+Sorun giderme (Logcat `DubStretch`): `dub format tagged` satırı var ama `stretching dub` yoksa etiket ses çıkışına ulaşmıyor
+(ör. FFmpeg çözücüsü); `foreign customData` satırı bunu gösterir.
+
+Kapsam dışı: yalnızca ExoPlayer'da çalışır; oran elle girilemez; hatırlanan oran sonraki açılışlarda da uygulanır.
 
 ## Nasıl güncellenir?
 - Her gün otomatik kontrol edilir. İş akışı Nuvio'nun **en son yayınlanan sürümüne** (Releases) bakar.
