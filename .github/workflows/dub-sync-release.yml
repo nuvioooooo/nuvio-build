@@ -114,6 +114,8 @@ jobs:
 
       - name: Çakışma olursa issue aç
         if: failure() && steps.apply.outcome == 'failure'
+        env:
+          GH_REPO: ${{ github.repository }}   # çalışma dizini git deposu değil; gh'a depoyu açıkça söyle
         run: |
           title="Dublaj eklentisi güncel Nuvio ile birleşemedi"
           body="Nuvio \`${{ steps.upstream.outputs.tag }}\` üstüne yamalar uygulanamadı. Yeni APK **yayınlanmadı**, eski sürüm çalışmaya devam eder.
