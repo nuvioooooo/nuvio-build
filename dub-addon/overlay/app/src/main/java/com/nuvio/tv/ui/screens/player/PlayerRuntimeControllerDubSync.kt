@@ -482,37 +482,38 @@ private fun PlayerRuntimeController.startDubSync(
 private fun PlayerRuntimeController.applyMeasuredDubDelay(delayMs: Int, lang: String) {
     audioDelayParts = audioDelayParts.withStream(delayMs, lang)
     syncStreamDelayWithSelectedTracks(forceApply = true)
-    resetEmbeddedSubtitleDelayForDubSync()
+    matchSubtitleDelayToAudioDelayAfterDubSync()
     Log.i(DUB_SYNC_TAG, "Measured dub delay applied: ${delayMs}ms (total ${audioDelayParts.totalMs}ms)")
 }
 
 /**
- * Embedded subtitles are locked to the video. A dub sync moves the video by the measured delay and
- * the subtitle renderers follow it through audioDelayUs, so an embedded subtitle always lands exactly
- * on the synced picture. A subtitle delay set by hand earlier (usually to hide the old drift) would
- * sit on top of that and is dropped, in memory and in the per-video saved value. Runs for a fresh
- * measurement and for a remembered result alike. Addon subtitles (OpenSubtitles etc.) are not locked
- * to the video, so their delay is left alone.
+ * true : after a dub sync the subtitle delay is set to exactly the audio delay value (what the audio
+ *        menu shows), for every subtitle, whatever it was before.
+ * false: the subtitle delay is cleared to 0 instead (the subtitle then simply follows the video).
+ * One word to flip if the subtitles end up on the wrong side.
  */
-private fun PlayerRuntimeController.resetEmbeddedSubtitleDelayForDubSync() {
-    if (subtitleDelayUs.get() == 0L && _uiState.value.subtitleDelayMs == 0) return
-    if (_uiState.value.selectedAddonSubtitle != null) return
-    // At the start of a playback the addon choice is only known as the remembered preference.
-    val remembered = rememberedTrackPreference?.subtitle ?: persistedTrackPreference?.subtitle
-    if (remembered is PlayerRuntimeController.RememberedSubtitleSelection.Addon) return
-    Log.i(DUB_SYNC_TAG, "Embedded subtitle follows the synced video: manual subtitle delay ${_uiState.value.subtitleDelayMs}ms cleared")
-    // Deliberately NOT resetSubtitleDelay(): that bounces the text track selection, which makes the
-    // player re-evaluate its tracks and the stream delay right in the middle of applying the sync.
-    // The renderers read the delay live, so only the values have to change.
+private const val SUBTITLE_DELAY_MIRRORS_AUDIO_DELAY = true
+
+/**
+ * Runs whenever a dub sync result is applied (fresh measurement and remembered result alike): the
+ * subtitle delay becomes the same value as the audio delay, ignoring and replacing any earlier value.
+ * Set directly (values only, no track-selection bounce, which would make the player re-evaluate its
+ * tracks and the stream delay in the middle of applying the sync); the renderers read it live.
+ */
+private fun PlayerRuntimeController.matchSubtitleDelayToAudioDelayAfterDubSync() {
+    val target = if (SUBTITLE_DELAY_MIRRORS_AUDIO_DELAY) {
+        audioDelayParts.totalMs.coerceIn(SUBTITLE_DELAY_MIN_MS, SUBTITLE_DELAY_MAX_MS)
+    } else 0
     runCatching {
-        subtitleDelayUs.set(0L)
-        _exoPlayer?.getAssHandlerCompat()?.let { it.subtitleDelayUs = streamSubtitleDelayUs.get() }
-        if (isUsingMpvEngine()) mpvView?.setSubtitleDelayMs(mpvSubtitleDelayMs(0))
-        _uiState.update { it.copy(subtitleDelayMs = 0) }
+        subtitleDelayUs.set(target.toLong() * 1000L)
+        _exoPlayer?.getAssHandlerCompat()?.let { it.subtitleDelayUs = target.toLong() * 1000L + streamSubtitleDelayUs.get() }
+        if (isUsingMpvEngine()) mpvView?.setSubtitleDelayMs(mpvSubtitleDelayMs(target))
+        _uiState.update { it.copy(subtitleDelayMs = target) }
         currentVideoId?.takeIf { it.isNotBlank() }?.let { vid ->
-            scope.launch { trackPreferenceDataStore.saveSubtitleDelayMs(vid, null) }
+            scope.launch { trackPreferenceDataStore.saveSubtitleDelayMs(vid, target.takeIf { it != 0 }) }
         }
-    }.onFailure { Log.w(DUB_SYNC_TAG, "subtitle delay reset failed: ${it.message}") }
+        Log.i(DUB_SYNC_TAG, "Subtitle delay set to ${target}ms (audio delay ${audioDelayParts.totalMs}ms)")
+    }.onFailure { Log.w(DUB_SYNC_TAG, "subtitle delay update failed: ${it.message}") }
 }
 
 /**
