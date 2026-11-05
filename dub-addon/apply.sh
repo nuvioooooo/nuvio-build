@@ -60,6 +60,16 @@ edits = [
    "        val baseAudioSink = builder.build()\n",
    "        // Başka hızda yapılmış dublajı uzatır; diğer tüm sesler olduğu gibi geçer.\n"
    "        val baseAudioSink = DubStretchAudioSink(builder.build())\n"),
+  # Gömülü altyazı videoya kilitlidir; dublaj senkronu videoyu kaydırır ve altyazı renderer'ı
+  # audioDelayUs ile onunla birlikte kayar. Upstream, akış dilindeki gömülü altyazıya ayrıca
+  # akış ofseti ekler (altyazının ses kaynağıyla aynı zaman çizgisinde olduğunu varsayar); bu,
+  # dublaj için yanlıştır ve kaymayı geri alır. Ofset hiçbir altyazıya uygulanmasın.
+  (P + "PlayerRuntimeControllerPlaybackEvents.kt",
+   "        streamLanguage != null &&\n"
+   "            hasSelectedInternalSubtitle &&\n"
+   "            !addonSubtitleActive &&\n"
+   "            PlayerSubtitleUtils.matchesLanguageCode(selectedInternalSubtitleLanguage, streamLanguage)\n",
+   "        false // DUB: gömülü altyazı videoyla birlikte kayar (audioDelayUs); ek akış ofseti yok\n"),
 ]
 for path, old, new in edits:
     s = open(path, encoding="utf-8").read()

@@ -481,7 +481,26 @@ private fun PlayerRuntimeController.startDubSync(
 private fun PlayerRuntimeController.applyMeasuredDubDelay(delayMs: Int, lang: String) {
     audioDelayParts = audioDelayParts.withStream(delayMs, lang)
     syncStreamDelayWithSelectedTracks(forceApply = true)
+    resetEmbeddedSubtitleDelayForDubSync()
     Log.i(DUB_SYNC_TAG, "Measured dub delay applied: ${delayMs}ms (total ${audioDelayParts.totalMs}ms)")
+}
+
+/**
+ * Embedded subtitles are locked to the video. A dub sync moves the video by the measured delay and
+ * the subtitle renderers follow it through audioDelayUs, so an embedded subtitle always lands exactly
+ * on the synced picture. A subtitle delay set by hand earlier (usually to hide the old drift) would
+ * sit on top of that and is dropped, in memory and in the per-video saved value. Runs for a fresh
+ * measurement and for a remembered result alike. Addon subtitles (OpenSubtitles etc.) are not locked
+ * to the video, so their delay is left alone.
+ */
+private fun PlayerRuntimeController.resetEmbeddedSubtitleDelayForDubSync() {
+    if (subtitleDelayUs.get() == 0L && _uiState.value.subtitleDelayMs == 0) return
+    if (_uiState.value.selectedAddonSubtitle != null) return
+    // At the start of a playback the addon choice is only known as the remembered preference.
+    val remembered = rememberedTrackPreference?.subtitle ?: persistedTrackPreference?.subtitle
+    if (remembered is PlayerRuntimeController.RememberedSubtitleSelection.Addon) return
+    Log.i(DUB_SYNC_TAG, "Embedded subtitle follows the synced video: manual subtitle delay ${_uiState.value.subtitleDelayMs}ms cleared")
+    resetSubtitleDelay(showOverlay = false)
 }
 
 /**
