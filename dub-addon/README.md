@@ -129,4 +129,4 @@ Bu işi Claude'a da verebilirsin: çakışan dosya adı ve upstream commit'i yet
 Dublaj senkronu videoyu `audioDelayUs` kadar kaydırır (ses saati ana saat olduğu için video ters yönde kaydırılır); altyazı renderer'ları aynı değerle videoyla birlikte kayar. Gömülü altyazı videoya kilitli olduğu için ek ofset gerekmez:
 
 - `apply.sh` (2b): upstream `StreamDelayScope.appliesToSubtitle` her zaman `false` döner. Upstream, akış dilindeki gömülü altyazıya ayrıca `streamSourceOffsetMs` ofseti ekliyordu; bu, dublajda kaymayı geri alıyordu.
-- `PlayerRuntimeControllerDubSync.kt` `resetEmbeddedSubtitleDelayForDubSync()`: senkron uygulanınca (yeni ölçüm ve kayıtlı sonuç) elle ayarlanmış altyazı gecikmesi sıfırlanır ve video başına kaydı silinir. Eklenti altyazısı seçiliyse dokunulmaz.
+- `PlayerRuntimeControllerDubSync.kt` `resetEmbeddedSubtitleDelayForDubSync()`: senkron uygulanınca (yeni ölçüm ve kayıtlı sonuç) elle ayarlanmış altyazı gecikmesi, oynatıcı izlerine dokunmadan, sıfırlanır ve video başına kaydı silinir. Eklenti altyazısı seçiliyse dokunulmaz.

@@ -21,6 +21,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -500,7 +501,18 @@ private fun PlayerRuntimeController.resetEmbeddedSubtitleDelayForDubSync() {
     val remembered = rememberedTrackPreference?.subtitle ?: persistedTrackPreference?.subtitle
     if (remembered is PlayerRuntimeController.RememberedSubtitleSelection.Addon) return
     Log.i(DUB_SYNC_TAG, "Embedded subtitle follows the synced video: manual subtitle delay ${_uiState.value.subtitleDelayMs}ms cleared")
-    resetSubtitleDelay(showOverlay = false)
+    // Deliberately NOT resetSubtitleDelay(): that bounces the text track selection, which makes the
+    // player re-evaluate its tracks and the stream delay right in the middle of applying the sync.
+    // The renderers read the delay live, so only the values have to change.
+    runCatching {
+        subtitleDelayUs.set(0L)
+        _exoPlayer?.getAssHandlerCompat()?.let { it.subtitleDelayUs = streamSubtitleDelayUs.get() }
+        if (isUsingMpvEngine()) mpvView?.setSubtitleDelayMs(mpvSubtitleDelayMs(0))
+        _uiState.update { it.copy(subtitleDelayMs = 0) }
+        currentVideoId?.takeIf { it.isNotBlank() }?.let { vid ->
+            scope.launch { trackPreferenceDataStore.saveSubtitleDelayMs(vid, null) }
+        }
+    }.onFailure { Log.w(DUB_SYNC_TAG, "subtitle delay reset failed: ${it.message}") }
 }
 
 /**
