@@ -1,0 +1,36 @@
+diff --git a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerScreen.kt b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerScreen.kt
+index 72fa7c249..d7a193f84 100644
+--- a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerScreen.kt
++++ b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerScreen.kt
+@@ -1973,7 +1973,31 @@ fun PlayerScreen(
+         }
+ 
+         // Audio track dialog
++        var showExternalAudioDialog by remember { mutableStateOf(false) }
++        if (showExternalAudioDialog) {
++            ExternalAudioDialog(
++                onDismiss = { showExternalAudioDialog = false },
++                onConfirm = { audioUrl, audioReferer ->
++                    showExternalAudioDialog = false
++                    viewModel.onEvent(
++                        PlayerEvent.OnAddExternalAudio(audioUrl, audioReferer.ifBlank { null })
++                    )
++                }
++            )
++        }
+         AudioSelectionOverlay(
++            onAddExternalAudio = {
++                showExternalAudioDialog = true
++                viewModel.onEvent(PlayerEvent.OnDismissTransientOverlay)
++            },
++            onSearchDubAudio = {
++                viewModel.onEvent(PlayerEvent.OnSearchDubAudio)
++                viewModel.onEvent(PlayerEvent.OnDismissTransientOverlay)
++            },
++            onSyncDubAudio = {
++                viewModel.onEvent(PlayerEvent.OnSyncDubAudio)
++                viewModel.onEvent(PlayerEvent.OnDismissTransientOverlay)
++            },
+             visible = uiState.showAudioOverlay,
+             tracks = uiState.serverAudioTracks.ifEmpty { uiState.audioTracks },
+             selectedIndex = uiState.serverAudioTracks.firstOrNull { it.isSelected }?.index ?: uiState.selectedAudioTrackIndex,

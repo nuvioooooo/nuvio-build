@@ -1,0 +1,14 @@
+diff --git a/app/src/main/java/com/nuvio/tv/domain/model/Stream.kt b/app/src/main/java/com/nuvio/tv/domain/model/Stream.kt
+index 721536401..ab2c72b3c 100644
+--- a/app/src/main/java/com/nuvio/tv/domain/model/Stream.kt
++++ b/app/src/main/java/com/nuvio/tv/domain/model/Stream.kt
+@@ -30,7 +30,8 @@ data class Stream(
+     val badges: List<StreamBadge> = emptyList(),
+     val subtitles: List<Subtitle> = emptyList(),
+     val serverTarget: ServerPlaybackTarget? = null,
+-    val pluginSourceName: String? = null
++    val pluginSourceName: String? = null,
++    val externalAudios: List<ExternalAudio> = emptyList()
+ ) {
+     /**
+      * Returns the primary stream source URL

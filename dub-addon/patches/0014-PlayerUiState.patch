@@ -1,0 +1,14 @@
+diff --git a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerUiState.kt b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerUiState.kt
+index 1f13f7487..fe999f717 100644
+--- a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerUiState.kt
++++ b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerUiState.kt
+@@ -318,6 +318,9 @@ sealed class PlayerEvent {
+     data object OnDismissChaptersPanel : PlayerEvent()
+     data class OnSelectChapter(val index: Int) : PlayerEvent()
+     data class OnSelectAudioTrack(val index: Int) : PlayerEvent()
++    data class OnAddExternalAudio(val url: String, val referer: String?) : PlayerEvent()
++    data object OnSearchDubAudio : PlayerEvent()
++    data object OnSyncDubAudio : PlayerEvent()
+     data class OnSetAudioDelayMs(val delayMs: Int) : PlayerEvent()
+     data class OnSetAudioAmplificationDb(val db: Int) : PlayerEvent()
+     data class OnSetPersistAudioAmplification(val enabled: Boolean) : PlayerEvent()
