@@ -1,5 +1,5 @@
 diff --git a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeController.kt b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeController.kt
-index 67c4c6972..69fb67938 100644
+index 9e57ddc..35c878f 100644
 --- a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeController.kt
 +++ b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeController.kt
 @@ -237,6 +237,10 @@ class PlayerRuntimeController(
@@ -21,4 +21,4 @@ index 67c4c6972..69fb67938 100644
 +            .ifEmpty { StreamSidecarAudio.forUrl(currentStreamUrl) }
      }
  
-     fun getCurrentStreamUrl(): String = currentStreamUrl
+     /** URL opened from the reuse-last-link cache; it is refetched after a playback error even without a token. */
