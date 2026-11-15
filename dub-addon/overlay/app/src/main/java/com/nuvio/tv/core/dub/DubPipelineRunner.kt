@@ -4,10 +4,19 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
 import kotlin.math.abs
+import android.util.Base64
+import java.security.MessageDigest
+import javax.crypto.Cipher
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.PBEKeySpec
+import javax.crypto.spec.SecretKeySpec
 
 private const val RUNNER_TAG = "DubPipeline"
 private const val MAX_BODY_BYTES = 3L * 1024 * 1024
@@ -18,7 +27,7 @@ private const val DEFAULT_UA =
 /**
  * Runs a provider recipe: search page, pick a result, then walk the listed steps
  * (http_get, regex, json_path, rot13, base64, reverse, shift_key, set, check, replace, require,
- * hls_audio, js_unpack, rapidrame_decode) until one of them yields the audio URL.
+ * hls_audio, js_unpack, rapidrame_decode, rsc_enc_decrypt, js_object, pichive_sign) until one of them yields the audio URL.
  * Only these built-in operations exist; the recipe is data.
  */
 internal class DubPipelineRunner(private val http: OkHttpClient) {
@@ -34,10 +43,19 @@ internal class DubPipelineRunner(private val http: OkHttpClient) {
         for (rawQuery in queries) {
             ensureActive()
             val query = expand(rawQuery, baseVars, strict = true) ?: continue
-            val searchVars = baseVars + ("q" to URLEncoder.encode(query, "UTF-8"))
-            val searchUrl = expand(provider.searchUrl, searchVars, strict = true) ?: continue
+            // search.url "POST <adres> <json-gövde>" ile başlarsa POST'tur ({q} gövdede JSON kaçışlıdır).
+            val spec = provider.searchUrl.trim()
+            val post = spec.startsWith("POST ")
+            val rest = if (post) spec.removePrefix("POST ").trim() else spec
+            val qValue = if (post) org.json.JSONObject.quote(query).let { it.substring(1, it.length - 1) }
+            else URLEncoder.encode(query, "UTF-8")
+            val searchVars = baseVars + ("q" to qValue)
+            val searchUrl = expand(if (post) rest.substringBefore(' ') else rest, searchVars, strict = true) ?: continue
+            val searchBody = if (post) (expand(rest.substringAfter(' ', ""), searchVars, strict = true) ?: continue) else null
+            val searchHeaders = LinkedHashMap<String, String>(provider.headers)
+            if (post) searchHeaders["Origin"] = provider.base
             val html = try {
-                fetch(searchUrl, provider.base + "/", provider.headers)
+                fetch(searchUrl, provider.base + "/", searchHeaders, searchBody)
             } catch (e: Exception) {
                 Log.w(RUNNER_TAG, "[${provider.id}] search failed: ${e.message}")
                 null
@@ -205,6 +223,15 @@ internal class DubPipelineRunner(private val http: OkHttpClient) {
                     DubOps.hlsAudio(text, playlistUrl, p.optString("lang", "tr"), p.optString("name", ""))
                         ?: return fail(provider, step, "no separate audio rendition for lang '${p.optString("lang", "tr")}' (link is video)")
                 }
+                "rsc_enc_decrypt" -> DubSelcuk.rscEncDecrypt(input)
+                    ?: return fail(provider, step, "enc block not found or could not be decrypted")
+                "js_object" -> DubSelcuk.jsObject(input, p.optString("after", ""))
+                    ?: return fail(provider, step, "object not found after '${p.optString("after", "")}'")
+                "pichive_sign" -> {
+                    val htmlVar = p.optString("html", "")
+                    val html = if (htmlVar.isEmpty()) "" else (vars[htmlVar] ?: return fail(provider, step, "missing var '$htmlVar'"))
+                    DubSelcuk.pichiveSign(html, input.trim())
+                }
                 "set" -> expand(p.optString("value", ""), vars + ("cur" to cur), strict = false)
                     ?: return fail(provider, step, "bad template")
                 "check" -> {
@@ -299,11 +326,15 @@ internal class DubPipelineRunner(private val http: OkHttpClient) {
         else -> Charsets.ISO_8859_1
     }
 
-    private fun fetch(url: String, referer: String?, headers: Map<String, String>): String? {
+    private fun fetch(url: String, referer: String?, headers: Map<String, String>, jsonBody: String? = null): String? {
         if (!url.startsWith("https://")) return null
         val builder = Request.Builder().url(url).header("User-Agent", DEFAULT_UA)
-        for ((k, v) in headers) builder.header(k, v)
+        for ((k, v) in headers) {
+            if (jsonBody != null && k.equals("Content-Type", ignoreCase = true)) continue // gövde kendi türünü taşır
+            builder.header(k, v)
+        }
         if (!referer.isNullOrBlank()) builder.header("Referer", referer)
+        if (jsonBody != null) builder.post(jsonBody.toRequestBody("application/json; charset=utf-8".toMediaType()))
         return http.newCall(builder.build()).execute().use { response ->
             if (response.isSuccessful) response.peekBody(MAX_BODY_BYTES).string() else null
         }
@@ -337,5 +368,140 @@ internal class DubPipelineRunner(private val http: OkHttpClient) {
                 val value = vars[m.groupValues[1]]
                 if (value.isNullOrEmpty()) m.value else Regex.escape(value)
             }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SelcukFlix / DiziPal işlemleri: rsc_enc_decrypt, js_object, pichive_sign
+// ---------------------------------------------------------------------------
+/**
+ * SelcukFlix / DiziPal (Next.js) için işlemler: "rsc_enc_decrypt", "js_object", "pichive_sign".
+ * Algoritmalar bigbullapp-cs `Common.kt` ile aynıdır.
+ */
+internal object DubSelcuk {
+
+    // RSC yükü kaçışlı JSON taşır: \"ciphertext\":\"...\"
+    private val ENC_FIELD = Regex("""\\{0,3}"(ciphertext|iv|salt|k)\\{0,3}":\\{0,3}"([^"\\]+)""")
+
+    private fun String.hexToBytes(): ByteArray = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
+    /**
+     * Sayfadaki `enc` bloğunu (ciphertext/iv/salt/k) çözer ve oynatıcı adresini döndürür.
+     * Parola `k` alanındadır; sayfa yolu da `k` olarak geçtiği için '/' içerenler elenir.
+     * PBKDF2-HMAC-SHA512 (999 tur, 256 bit) + AES-256-CBC. Salt ve iv hex'tir.
+     */
+    fun rscEncDecrypt(html: String): String? {
+        val fields = ENC_FIELD.findAll(html).groupBy({ it.groupValues[1] }) { it.groupValues[2] }
+        val cipherText = fields["ciphertext"]?.firstOrNull() ?: return null
+        val iv = fields["iv"]?.firstOrNull() ?: return null
+        val salt = fields["salt"]?.firstOrNull() ?: return null
+        val passphrase = fields["k"]?.filter { '/' !in it }?.maxByOrNull { it.length } ?: return null
+        val clear = runCatching {
+            val key = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA512")
+                .generateSecret(PBEKeySpec(passphrase.toCharArray(), salt.hexToBytes(), 999, 256))
+                .encoded
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding").apply {
+                init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv.hexToBytes()))
+            }
+            String(cipher.doFinal(Base64.decode(cipherText, Base64.DEFAULT)), Charsets.UTF_8)
+        }.getOrNull() ?: return null
+        return httpsUrl(clear.trim('\t', '\r', '\n', ' ', '\u000f')).takeIf { it.startsWith("https://") }
+    }
+
+    private fun httpsUrl(raw: String): String = when {
+        raw.startsWith("//") -> "https:$raw"
+        raw.startsWith("http://") -> "https://" + raw.removePrefix("http://")
+        else -> raw
+    }
+
+    /**
+     * [after] işaretinden (örn. `window.NP_CONFIG`) sonraki ilk `{`'den başlayıp süslü parantezleri
+     * sayarak nesneyi çıkarır (string içindekiler atlanır). `after` boşsa metindeki ilk `{` alınır.
+     */
+    fun jsObject(text: String, after: String): String? {
+        val anchor = if (after.isEmpty()) 0 else text.indexOf(after)
+        if (anchor < 0) return null
+        val from = text.indexOf('{', anchor)
+        if (from < 0) return null
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in from until text.length) {
+            val c = text[i]
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    c == '\\' -> escaped = true
+                    c == '"' -> inString = false
+                }
+                continue
+            }
+            when (c) {
+                '"' -> inString = true
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return text.substring(from, i + 1)
+                }
+            }
+        }
+        return null
+    }
+
+    // ------------------------------------------------------------- pichive imzası
+
+    /** pichive `nm.php` / `nsub.php` adreslerine `&p=<nonce>` ekler; diğer adresler değişmez. */
+    fun pichiveSign(html: String, url: String): String {
+        if (!(url.contains("/nm.php") || url.contains("/nsub.php")) || url.contains("&p=")) return url
+        val nonce = pichiveGateNonce(html) ?: return url
+        return "$url&p=$nonce"
+    }
+
+    private fun pichiveGateNonce(html: String): String? {
+        val gate = Regex(""""gate"\s*:\s*\{\s*"n"\s*:\s*"([^"]+)"(?:\s*,\s*"b"\s*:\s*(\d+))?""").find(html) ?: return null
+        val n = gate.groupValues[1]
+        val bits = gate.groupValues[2].toIntOrNull() ?: 12
+        val md = MessageDigest.getInstance("SHA-256")
+        fun wordAt(msg: String, idx: Int): Long {
+            val d = md.digest(msg.toByteArray(Charsets.UTF_8))
+            val o = idx.coerceIn(0, 7) * 4
+            return ((d[o].toLong() and 0xff) shl 24) or ((d[o + 1].toLong() and 0xff) shl 16) or
+                ((d[o + 2].toLong() and 0xff) shl 8) or (d[o + 3].toLong() and 0xff)
+        }
+        val fn = Regex("""window\.NP_GATE\s*=\s*function\(\s*(\w+)\s*,\s*(\w+)\s*\)\s*\{([\s\S]*?)\};""").find(html)
+        if (fn == null) {
+            for (i in 0 until 50_000_000) if (wordAt("$n:$i", 0) ushr (32 - bits) == 0L) return i.toString()
+            return null
+        }
+        val nVar = fn.groupValues[1]
+        val body = fn.groupValues[3]
+        val cm = Regex("""var\s+(\w+)\s*=\s*String\.fromCharCode\(([\d,\s]+)\)""").find(body) ?: return null
+        val saltVar = cm.groupValues[1]
+        val salt = cm.groupValues[2].split(',').map { it.trim().toInt().toChar() }.joinToString("")
+        val nonceMatch = Regex("""var\s+(\w+)\s*=\s*(?:\w+\.toString\((\d*)\)|String\(\w+\))""").find(body) ?: return null
+        val nonceVar = nonceMatch.groupValues[1]
+        val radix = nonceMatch.groupValues[2].toIntOrNull()?.coerceIn(2, 36) ?: 10
+        val im = Regex("""\(\s*\w+\(([^)]+)\)\[(\d+)\]\s*(>>>|&)\s*(\d+)\s*\)\s*===?\s*0""").find(body) ?: return null
+        val parts = im.groupValues[1].split('+').map { it.trim() }
+        val wordIdx = im.groupValues[2].toIntOrNull() ?: 0
+        val op = im.groupValues[3]
+        val rhs = im.groupValues[4].toLongOrNull() ?: return null
+        for (i in 0 until 50_000_000) {
+            val nonce = java.lang.Long.toString(i.toLong(), radix)
+            val msg = buildString {
+                for (p in parts) {
+                    when (p) {
+                        nVar -> append(n)
+                        saltVar -> append(salt)
+                        nonceVar -> append(nonce)
+                        else -> append(p.trim('\'', '"'))
+                    }
+                }
+            }
+            val w = wordAt(msg, wordIdx)
+            val ok = if (op == ">>>") (w ushr rhs.toInt()) == 0L else (w and rhs) == 0L
+            if (ok) return nonce
+        }
+        return null
     }
 }
