@@ -133,3 +133,13 @@ Bu işi Claude'a da verebilirsin: çakışan dosya adı ve upstream commit'i yet
 - Yamalar derlenip sınanmadan yayınlanmaz ama dublaj davranışını otomatik test eden bir test yok;
   Nuvio büyük bir oynatıcı yeniden yazımı yaparsa eklenti çalışmayabilir (derleme hatası olarak görürsün).
 - `dublaj_kaynaklari.json` ayrı `nuvioooooo/dub` deposundan çekilir (adres `core/dub/DubSourceManager.kt` içinde). Site değişince orayı güncellemek yeter, APK gerekmez.
+
+## Çapa tabanlı uygulama (çakışmaları azaltır)
+
+`apply.sh` yamaları artık önce **`edits.json`** ile uygular: her değişiklik "şu metni bul (dosyada tam 1 kez
+geçmeli), yerine şunu koy" şeklindedir; satır numarasına ve çevre satırlara bağlı değildir. Upstream import
+ekler ya da yakındaki satırları değiştirirse bile çoğunlukla çakışmaz. Çapa tutmazsa o yama için eski
+`patches/*.patch` dosyası `git apply --3way` ile denenir; ikisi de olmazsa iş akışı yine net hata verir.
+
+- `edits.json`, `scripts/export-patches.sh` çalışınca yamalardan otomatik yeniden üretilir (elle düzenleme).
+- Çapa upstream'de birden fazla yerde geçiyorsa **sessizce yanlış yere yazmaz**, hata verir.

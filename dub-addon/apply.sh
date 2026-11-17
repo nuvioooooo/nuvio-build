@@ -28,14 +28,8 @@ echo "overlay: $(find "$ADDON/overlay" -type f | wc -l) yeni dosya eklendi"
 
 # --- 2) Mevcut dosyalardaki küçük değişiklikler (patch, 3-way) ------------------------
 failed=0
-for p in "$ADDON"/patches/*.patch; do
-  if git apply --3way "$p" >/dev/null 2>&1; then
-    echo "patch OK   $(basename "$p")"
-  else
-    echo "::error::patch ÇAKIŞTI  $(basename "$p")"
-    failed=1
-  fi
-done
+# Önce çapa tabanlı düzenleme (satır numarasına/çevre satırlara bağlı değil), olmazsa eski yama.
+python3 -I "$ADDON/scripts/apply-edits.py" "$ADDON" || failed=1
 if [ "$failed" -ne 0 ] || grep -rIl --include='*.kt' -E '^(<<<<<<<|>>>>>>>) ' app/src >/dev/null 2>&1; then
   echo "::error::Eklenti yamaları güncel Nuvio koduyla birleşemedi. Elle çözüm gerekli."
   git diff --name-only --diff-filter=U || true
