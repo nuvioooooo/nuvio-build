@@ -40,7 +40,13 @@
    {
     "file": "app/src/main/java/com/nuvio/tv/domain/model/Stream.kt",
     "old": "    val debridResolved: Boolean = false\n",
-    "new": "    val debridResolved: Boolean = false,\n    val externalAudios: List<ExternalAudio> = emptyList()\n"
+    "new": "    val debridResolved: Boolean = false,\n    val externalAudios: List<ExternalAudio> = emptyList()\n",
+    "alts": [
+     {
+      "old": "    val pluginSourceName: String? = null\n) {\n",
+      "new": "    val pluginSourceName: String? = null,\n    val externalAudios: List<ExternalAudio> = emptyList()\n) {\n"
+     }
+    ]
    }
   ]
  },
@@ -230,7 +236,13 @@
    {
     "file": "app/src/main/java/com/nuvio/tv/ui/screens/stream/StreamScreenViewModel.kt",
     "old": "import com.nuvio.tv.ui.screens.player.SourceFallbackHandoff\n",
-    "new": "import com.nuvio.tv.ui.screens.player.SourceFallbackHandoff\nimport com.nuvio.tv.ui.screens.player.StreamSidecarAudio\n"
+    "new": "import com.nuvio.tv.ui.screens.player.SourceFallbackHandoff\nimport com.nuvio.tv.ui.screens.player.StreamSidecarAudio\n",
+    "alts": [
+     {
+      "old": "import com.nuvio.tv.ui.screens.player.StreamSidecarSubtitles\n",
+      "new": "import com.nuvio.tv.ui.screens.player.StreamSidecarAudio\nimport com.nuvio.tv.ui.screens.player.StreamSidecarSubtitles\n"
+     }
+    ]
    },
    {
     "file": "app/src/main/java/com/nuvio/tv/ui/screens/stream/StreamScreenViewModel.kt",
