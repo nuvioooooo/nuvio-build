@@ -14,9 +14,14 @@ for e in entries:
         t = texts.get(ed["file"])
         if t is None:
             t = open(ed["file"], encoding="utf-8").read()
-        if t.count(ed["old"]) != 1:
+        # Ana çapa tutmazsa "alts" içindeki alternatif çapalar sırayla denenir
+        # (upstream sürümleri arasında satır biçimi farklıysa, ör. 1.1.x ve 1.2.x).
+        for cand in [ed] + ed.get("alts", []):
+            if t.count(cand["old"]) == 1:
+                texts[ed["file"]] = t.replace(cand["old"], cand["new"])
+                break
+        else:
             ok = False; break
-        texts[ed["file"]] = t.replace(ed["old"], ed["new"])
     if ok:
         for f, t in texts.items():
             open(f, "w", encoding="utf-8").write(t)
