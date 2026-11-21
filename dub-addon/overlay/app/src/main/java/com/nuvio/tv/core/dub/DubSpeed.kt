@@ -67,6 +67,43 @@ internal object DubSpeed {
             ?.ratio
     }
 
+    /**
+     * A residual slope (ms of lag per ms of film) after a stretch smaller than this is measurement
+     * noise: the ratio is good enough and is not touched. (Windows span about half the film; their
+     * peaks are accurate to ~120 ms, so the slope itself is only known to ~4e-5.)
+     */
+    const val REFINE_MIN_SLOPE = 0.0002
+
+    /**
+     * A residual slope larger than this after a stretch is not "the wrong one of two close speed
+     * pairs" (those differ by ~0.001) but a wrong hypothesis (another cut, an extra part): the
+     * stretch is taken back instead of refined.
+     */
+    const val WRONG_SLOPE = 0.002
+
+    /**
+     * The ratio to use instead of [current] when, after stretching by [current], the dub still
+     * drifts with [slope]. The lag at film position p is p * (rTrue / rCurrent - 1), so
+     * rTrue = rCurrent * (1 + slope). Null when the slope is noise, too big to be a refinement, or
+     * the result would not be a plausible stretch.
+     */
+    fun refinedRatio(current: Double, slope: Double): Double? {
+        if (!current.isFinite() || !slope.isFinite()) return null
+        if (abs(slope) < REFINE_MIN_SLOPE || abs(slope) > WRONG_SLOPE) return null
+        return (current * (1.0 + slope)).takeIf { DubStretch.isOn(it) }
+    }
+
+    /** After a stretch: a slope this big means the stretch itself was a wrong guess. */
+    fun isWrongHypothesis(slope: Double): Boolean = !slope.isFinite() || abs(slope) > WRONG_SLOPE
+
+    /**
+     * After the ratio was refined once: a slope that is still above the noise level means the
+     * refinement did not work (the guess behind the stretch was wrong), and the stretch is taken
+     * back. Deliberately the same threshold as [REFINE_MIN_SLOPE] (about 5x the measurement error
+     * of the slope), so a correct stretch is never undone because of noise.
+     */
+    fun refinementFailed(slope: Double): Boolean = !slope.isFinite() || abs(slope) >= REFINE_MIN_SLOPE
+
     /** A hint for a measured slope (ms of lag per ms of film), empty when it matches nothing known. */
     fun slopeHint(slope: Double): String =
         if (abs(abs(slope) - 0.001) < 0.0004) " (24 ↔ 23.976 ya da 30 ↔ 29.97 fps farkına benziyor)" else ""

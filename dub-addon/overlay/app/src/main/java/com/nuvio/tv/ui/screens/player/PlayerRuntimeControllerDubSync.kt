@@ -181,14 +181,27 @@ private class SyncOutcome(
 )
 
 /** Stretches the dub by [known] and measures what is left (a plain constant shift again). */
-private fun PlayerRuntimeController.stretchAndResync(audio: ExternalAudio, known: Double, dubMs: Long?, videoMs: Long?) {
-    Log.i(DUB_SYNC_TAG, "speed difference: dub=${dubMs}ms video=${videoMs}ms ratio=$known -> stretching the dub")
+private fun PlayerRuntimeController.stretchAndResync(
+    audio: ExternalAudio,
+    known: Double,
+    dubMs: Long?,
+    videoMs: Long?,
+    refined: Boolean = false
+) {
+    Log.i(
+        DUB_SYNC_TAG,
+        "speed difference: dub=${dubMs}ms video=${videoMs}ms ratio=$known refined=$refined -> stretching the dub"
+    )
     val shorter = known < 1.0
     Toast.makeText(
         context,
-        "Dublaj videodan %${DubStretch.percentText(known)} ${if (shorter) "kısa" else "uzun"}: " +
-            "hız farkı bulundu. Dublaj ${if (shorter) "yavaşlatılıyor" else "hızlandırılıyor"}, " +
-            "kalan kayma ölçülecek…",
+        if (refined) {
+            "Hız oranı inceltiliyor (%${DubStretch.percentText(known)}), kalan kayma yeniden ölçülecek…"
+        } else {
+            "Dublaj videodan %${DubStretch.percentText(known)} ${if (shorter) "kısa" else "uzun"}: " +
+                "hız farkı bulundu. Dublaj ${if (shorter) "yavaşlatılıyor" else "hızlandırılıyor"}, " +
+                "kalan kayma ölçülecek…"
+        },
         Toast.LENGTH_LONG
     ).show()
     // Taken BEFORE the rebuild: right after it the player does not know the length for a while, and the
@@ -198,7 +211,7 @@ private fun PlayerRuntimeController.stretchAndResync(audio: ExternalAudio, known
     if (stretched != null) {
         // This job is done; a new one measures the stretched dub.
         dubSyncJob = null
-        startDubSync(stretched, silent = false, autoStretched = true, knownDurationMs = filmMs)
+        startDubSync(stretched, silent = false, autoStretched = true, knownDurationMs = filmMs, refined = refined)
     }
 }
 
@@ -206,7 +219,9 @@ private fun PlayerRuntimeController.startDubSync(
     audio: ExternalAudio,
     silent: Boolean,
     autoStretched: Boolean = false,
-    knownDurationMs: Long? = null
+    knownDurationMs: Long? = null,
+    /** True when this run follows a refinement of the ratio: it is refined at most once. */
+    refined: Boolean = false
 ) {
     val player = _exoPlayer ?: return
     if (dubSyncJob?.isActive == true) {
@@ -409,6 +424,35 @@ private fun PlayerRuntimeController.startDubSync(
                 val perMinuteMs = Math.round(r.slope * 60_000).toInt()
                 val lagNow = r.lagAtMs(player.currentPosition)
                 Log.i(DUB_SYNC_TAG, "drift: slope=${r.slope} offset=${r.offsetMs}ms lagNow=${lagNow}ms inliers=${r.inliers}/${r.windows}")
+                if (DubStretch.isOn(audio.stretchRatio)) {
+                    // The ratio of a stretch is one of a few nominal ones; the true one can differ by ~0.1%
+                    // (about 5 s over a film). What is left over is the slope: use it to refine the ratio once.
+                    if (autoStretched && DubSpeed.isWrongHypothesis(r.slope)) {
+                        Log.i(DUB_SYNC_TAG, "stretch ${audio.stretchRatio} left slope ${r.slope}: wrong guess, taken back")
+                        applyDubStretch(audio, 1.0)
+                        if (!silent) {
+                            Toast.makeText(context, "Hız farkı varsayımı tutmadı, uzatma geri alındı. Elle ayarlayın.", Toast.LENGTH_LONG).show()
+                        }
+                        return@launch
+                    }
+                    if (!refined) {
+                        val better = DubSpeed.refinedRatio(audio.stretchRatio, r.slope)
+                        if (better != null) {
+                            stretchAndResync(audio, better, null, outcome.videoDurationMs, refined = true)
+                            return@launch
+                        }
+                    }
+                    // The refined ratio was measured and it still drifts clearly: the guess behind the
+                    // stretch was wrong. Do not leave it playing; take it back like the other failures.
+                    if (autoStretched && refined && DubSpeed.refinementFailed(r.slope)) {
+                        Log.i(DUB_SYNC_TAG, "refined stretch ${audio.stretchRatio} still leaves slope ${r.slope}: taken back")
+                        applyDubStretch(audio, 1.0)
+                        if (!silent) {
+                            Toast.makeText(context, "Oran inceltmesi kaymayı gidermedi, uzatma geri alındı. Elle ayarlayın.", Toast.LENGTH_LONG).show()
+                        }
+                        return@launch
+                    }
+                }
                 val dir = if (r.slope < 0) "öne kayıyor (dublaj hızlı)" else "geride kalıyor (dublaj yavaş)"
                 val head = "Kayma sabit değil: dublaj dakikada ~${abs(perMinuteMs)} ms $dir${DubSpeed.slopeHint(r.slope)}"
                 // Applied in automatic runs too, exactly like a manual one.
