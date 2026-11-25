@@ -1,8 +1,8 @@
 diff --git a/app/src/main/java/com/nuvio/tv/ui/screens/stream/StreamScreenViewModel.kt b/app/src/main/java/com/nuvio/tv/ui/screens/stream/StreamScreenViewModel.kt
-index d282cbf..440350d 100644
+index 610be63fb..33e9af31d 100644
 --- a/app/src/main/java/com/nuvio/tv/ui/screens/stream/StreamScreenViewModel.kt
 +++ b/app/src/main/java/com/nuvio/tv/ui/screens/stream/StreamScreenViewModel.kt
-@@ -52,6 +52,7 @@ import com.nuvio.tv.ui.components.SourceChipItem
+@@ -49,6 +49,7 @@ import com.nuvio.tv.ui.components.SourceChipItem
  import com.nuvio.tv.ui.components.SourceChipStatus
  import com.nuvio.tv.ui.screens.player.AutoPlayResolveAttempt
  import com.nuvio.tv.ui.screens.player.SourceFallbackHandoff
@@ -10,7 +10,7 @@ index d282cbf..440350d 100644
  import com.nuvio.tv.ui.screens.player.StreamSidecarSubtitles
  import com.nuvio.tv.ui.screens.player.nextSourceFallbackCandidate
  import com.nuvio.tv.ui.screens.player.resolveWithSourceFallback
-@@ -1368,6 +1369,7 @@ class StreamScreenViewModel @Inject constructor(
+@@ -1560,6 +1561,7 @@ class StreamScreenViewModel @Inject constructor(
                      videoSize = result.videoSize ?: basePlaybackInfo.videoSize
                  )
                  StreamSidecarSubtitles.set(result.url, stream.subtitles)
@@ -18,7 +18,7 @@ index d282cbf..440350d 100644
                  // Save resolved URL to cache for reuse last link
                  if (!result.url.isNullOrBlank()) {
                      pendingCacheSaveJob = viewModelScope.launch {
-@@ -1488,6 +1490,7 @@ class StreamScreenViewModel @Inject constructor(
+@@ -1691,6 +1693,7 @@ class StreamScreenViewModel @Inject constructor(
              isServerStream = true
          )
          StreamSidecarSubtitles.set(session.url, session.subtitles + stream.subtitles)
@@ -26,7 +26,7 @@ index d282cbf..440350d 100644
          return playbackInfo
      }
  
-@@ -1684,6 +1687,7 @@ class StreamScreenViewModel @Inject constructor(
+@@ -1930,6 +1933,7 @@ class StreamScreenViewModel @Inject constructor(
              audioDelayLanguage = stream.behaviorHints?.audioDelayLanguage
          )
          StreamSidecarSubtitles.set(playbackUrlFor(playbackInfo), stream.subtitles)

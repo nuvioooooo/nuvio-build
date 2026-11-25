@@ -1,5 +1,5 @@
 diff --git a/app/src/main/java/com/nuvio/tv/domain/model/Plugin.kt b/app/src/main/java/com/nuvio/tv/domain/model/Plugin.kt
-index 6baa47058..6c3531ad8 100644
+index d5d375f05..d69f3d482 100644
 --- a/app/src/main/java/com/nuvio/tv/domain/model/Plugin.kt
 +++ b/app/src/main/java/com/nuvio/tv/domain/model/Plugin.kt
 @@ -114,7 +114,8 @@ data class LocalScraperResult(

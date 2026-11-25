@@ -1,8 +1,8 @@
 diff --git a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerUiState.kt b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerUiState.kt
-index 1f13f7487..fe999f717 100644
+index e3dc1edce..6a9e69421 100644
 --- a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerUiState.kt
 +++ b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerUiState.kt
-@@ -318,6 +318,9 @@ sealed class PlayerEvent {
+@@ -367,6 +367,9 @@ sealed class PlayerEvent {
      data object OnDismissChaptersPanel : PlayerEvent()
      data class OnSelectChapter(val index: Int) : PlayerEvent()
      data class OnSelectAudioTrack(val index: Int) : PlayerEvent()

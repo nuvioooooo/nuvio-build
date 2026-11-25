@@ -1,21 +1,21 @@
 diff --git a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerMediaSourceFactory.kt b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerMediaSourceFactory.kt
-index b083fd5d9..7ca64ec1e 100644
+index beda4d4f5..91b2d4c8e 100644
 --- a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerMediaSourceFactory.kt
 +++ b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerMediaSourceFactory.kt
-@@ -22,6 +22,7 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
- import androidx.media3.exoplayer.dash.DashMediaSource
+@@ -23,6 +23,7 @@ import androidx.media3.exoplayer.dash.DashMediaSource
  import androidx.media3.exoplayer.hls.HlsMediaSource
+ import androidx.media3.exoplayer.source.ConcatenatingMediaSource2
  import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 +import androidx.media3.exoplayer.source.MergingMediaSource
  import androidx.media3.exoplayer.source.MediaSource
  import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
  import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
-@@ -172,7 +173,92 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
-         mimeTypeOverride: String? = null,
+@@ -189,7 +190,94 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
          audioDelayUsProvider: (() -> Long)? = null,
          mediaMetadata: androidx.media3.common.MediaMetadata? = null,
--        cacheKey: String? = null
-+        cacheKey: String? = null,
+         cacheKey: String? = null,
+-        bluray: BlurayPlaylistResolver.RemoteLayout? = null
++        bluray: BlurayPlaylistResolver.RemoteLayout? = null,
 +        externalAudios: List<com.nuvio.tv.domain.model.ExternalAudio> = emptyList(),
 +        // false: measurement probes read straight from the network and never touch the VOD disk cache.
 +        useDiskCache: Boolean = true
@@ -32,6 +32,7 @@ index b083fd5d9..7ca64ec1e 100644
 +            audioDelayUsProvider = audioDelayUsProvider,
 +            mediaMetadata = mediaMetadata,
 +            cacheKey = cacheKey,
++            bluray = bluray,
 +            useDiskCache = useDiskCache
 +        )
 +        val audioSources = externalAudios.mapNotNull { createExternalAudioSource(context, it) }
@@ -100,11 +101,12 @@ index b083fd5d9..7ca64ec1e 100644
 +        audioDelayUsProvider: (() -> Long)?,
 +        mediaMetadata: androidx.media3.common.MediaMetadata?,
 +        cacheKey: String?,
++        bluray: BlurayPlaylistResolver.RemoteLayout?,
 +        useDiskCache: Boolean = true
      ): MediaSource {
          val sanitizedHeaders = sanitizeHeaders(headers)
-         val resolvedMimeType = mimeTypeOverride ?: inferMimeType(
-@@ -258,13 +344,15 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
+         // A Blu-ray folder plays its feature playlist, clip by clip.
+@@ -304,13 +392,15 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
              }
  
          // 2. VOD disk cache (opt-in).
@@ -126,7 +128,7 @@ index b083fd5d9..7ca64ec1e 100644
          // Size the cache only when used; 0 means off or not enough free space (skip, stream direct).
          val vodCacheMaxBytes = if (useVodCache && !isVodCacheDisabled) resolveVodCacheMaxBytes() else 0L
          val vodCacheActive = vodCacheMaxBytes > 0L
-@@ -279,11 +367,11 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
+@@ -325,11 +415,11 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
                  progressiveUpstreamFactory
              }
          } else {
@@ -140,7 +142,7 @@ index b083fd5d9..7ca64ec1e 100644
              DataSource.Factory { BufferedReadDataSource(cachedProgressiveFactory.createDataSource()) }
          } else {
              cachedProgressiveFactory
-@@ -1103,6 +1191,9 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
+@@ -1246,6 +1336,9 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
              }
          }
  

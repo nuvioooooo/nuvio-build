@@ -1,8 +1,8 @@
 diff --git a/app/src/main/java/com/nuvio/tv/domain/model/Stream.kt b/app/src/main/java/com/nuvio/tv/domain/model/Stream.kt
-index d4cd3be..ff35d90 100644
+index b60194959..585a3d726 100644
 --- a/app/src/main/java/com/nuvio/tv/domain/model/Stream.kt
 +++ b/app/src/main/java/com/nuvio/tv/domain/model/Stream.kt
-@@ -32,7 +32,8 @@ data class Stream(
+@@ -43,7 +43,8 @@ data class Stream(
      val serverTarget: ServerPlaybackTarget? = null,
      val pluginSourceName: String? = null,
      /** True when [url] was produced by Nuvio's own debrid resolver, not returned by the add-on. */
@@ -10,5 +10,5 @@ index d4cd3be..ff35d90 100644
 +    val debridResolved: Boolean = false,
 +    val externalAudios: List<ExternalAudio> = emptyList()
  ) {
+     fun isUsenet(): Boolean = !nzbUrl.isNullOrBlank() && url.isNullOrBlank()
      /**
-      * Returns the primary stream source URL

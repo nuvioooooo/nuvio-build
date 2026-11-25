@@ -40,13 +40,7 @@
    {
     "file": "app/src/main/java/com/nuvio/tv/domain/model/Stream.kt",
     "old": "    val debridResolved: Boolean = false\n",
-    "new": "    val debridResolved: Boolean = false,\n    val externalAudios: List<ExternalAudio> = emptyList()\n",
-    "alts": [
-     {
-      "old": "    val pluginSourceName: String? = null\n) {\n",
-      "new": "    val pluginSourceName: String? = null,\n    val externalAudios: List<ExternalAudio> = emptyList()\n) {\n"
-     }
-    ]
+    "new": "    val debridResolved: Boolean = false,\n    val externalAudios: List<ExternalAudio> = emptyList()\n"
    }
   ]
  },
@@ -105,8 +99,8 @@
    },
    {
     "file": "app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerMediaSourceFactory.kt",
-    "old": "        cacheKey: String? = null\n",
-    "new": "        cacheKey: String? = null,\n        externalAudios: List<com.nuvio.tv.domain.model.ExternalAudio> = emptyList(),\n        // false: measurement probes read straight from the network and never touch the VOD disk cache.\n        useDiskCache: Boolean = true\n    ): MediaSource {\n        val base = createBaseMediaSource(\n            context = context,\n            url = url,\n            headers = headers,\n            subtitleConfigurations = subtitleConfigurations,\n            subtitleRoutes = subtitleRoutes,\n            filename = filename,\n            responseHeaders = responseHeaders,\n            mimeTypeOverride = mimeTypeOverride,\n            audioDelayUsProvider = audioDelayUsProvider,\n            mediaMetadata = mediaMetadata,\n            cacheKey = cacheKey,\n            useDiskCache = useDiskCache\n        )\n        val audioSources = externalAudios.mapNotNull { createExternalAudioSource(context, it) }\n        if (externalAudios.isNotEmpty()) {\n            Log.i(LOG_TAG, \"EXTERNAL_AUDIO: requested=${externalAudios.size} built=${audioSources.size}\")\n        }\n        if (audioSources.isEmpty()) return base\n        // The delay wrapper stays on the video source; the dub is aligned with the same offset\n        // path by the caller if needed. clipDurations keeps the shorter source from stalling.\n        return MergingMediaSource(false, true, base, *audioSources.toTypedArray())\n    }\n\n    private fun hasDirectAudioExtension(url: String): Boolean {\n        val path = url.substringBefore('#').substringBefore('?').lowercase()\n        return DIRECT_AUDIO_EXTENSIONS.any { path.endsWith(\".$it\") }\n    }\n\n    internal fun createExternalAudioSource(\n        context: Context,\n        audio: com.nuvio.tv.domain.model.ExternalAudio\n    ): MediaSource? {\n        val audioUrl = audio.url.substringBefore(\"#.m3u8\").takeIf { it.startsWith(\"http\") } ?: return null\n        val audioHeaders = sanitizeHeaders(audio.headers.orEmpty())\n        val mime = if (audioUrl.contains(\".mpd\", ignoreCase = true)) {\n            MimeTypes.APPLICATION_MPD\n        } else if (audioUrl.contains(\".m3u8\", ignoreCase = true) ||\n            audio.url.endsWith(\"#.m3u8\")\n        ) {\n            MimeTypes.APPLICATION_M3U8\n        } else if (hasDirectAudioExtension(audioUrl)) {\n            null\n        } else {\n            // Extensionless audio links (typical for CDN playlists) are HLS.\n            MimeTypes.APPLICATION_M3U8\n        }\n        val dataSourceFactory = DefaultDataSource.Factory(\n            context,\n            PlayerPlaybackNetworking.createHttpDataSourceFactory(audioHeaders, useLongReadTimeout = false)\n        )\n        val itemBuilder = MediaItem.Builder().setUri(audioUrl)\n        mime?.let(itemBuilder::setMimeType)\n        val item = itemBuilder.build()\n        return when (mime) {\n            MimeTypes.APPLICATION_M3U8 -> HlsMediaSource.Factory(dataSourceFactory)\n                .setAllowChunklessPreparation(true)\n                .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)\n                .createMediaSource(item)\n            MimeTypes.APPLICATION_MPD -> DashMediaSource.Factory(dataSourceFactory)\n                .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)\n                .createMediaSource(item)\n            else -> DefaultMediaSourceFactory(dataSourceFactory)\n                .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)\n                .createMediaSource(item)\n        }\n    }\n\n    private fun createBaseMediaSource(\n        context: Context,\n        url: String,\n        headers: Map<String, String>,\n        subtitleConfigurations: List<MediaItem.SubtitleConfiguration>,\n        subtitleRoutes: Map<String, SubtitleRoute>,\n        filename: String?,\n        responseHeaders: Map<String, String>,\n        mimeTypeOverride: String?,\n        audioDelayUsProvider: (() -> Long)?,\n        mediaMetadata: androidx.media3.common.MediaMetadata?,\n        cacheKey: String?,\n        useDiskCache: Boolean = true\n"
+    "old": "        bluray: BlurayPlaylistResolver.RemoteLayout? = null\n",
+    "new": "        bluray: BlurayPlaylistResolver.RemoteLayout? = null,\n        externalAudios: List<com.nuvio.tv.domain.model.ExternalAudio> = emptyList(),\n        // false: measurement probes read straight from the network and never touch the VOD disk cache.\n        useDiskCache: Boolean = true\n    ): MediaSource {\n        val base = createBaseMediaSource(\n            context = context,\n            url = url,\n            headers = headers,\n            subtitleConfigurations = subtitleConfigurations,\n            subtitleRoutes = subtitleRoutes,\n            filename = filename,\n            responseHeaders = responseHeaders,\n            mimeTypeOverride = mimeTypeOverride,\n            audioDelayUsProvider = audioDelayUsProvider,\n            mediaMetadata = mediaMetadata,\n            cacheKey = cacheKey,\n            bluray = bluray,\n            useDiskCache = useDiskCache\n        )\n        val audioSources = externalAudios.mapNotNull { createExternalAudioSource(context, it) }\n        if (externalAudios.isNotEmpty()) {\n            Log.i(LOG_TAG, \"EXTERNAL_AUDIO: requested=${externalAudios.size} built=${audioSources.size}\")\n        }\n        if (audioSources.isEmpty()) return base\n        // The delay wrapper stays on the video source; the dub is aligned with the same offset\n        // path by the caller if needed. clipDurations keeps the shorter source from stalling.\n        return MergingMediaSource(false, true, base, *audioSources.toTypedArray())\n    }\n\n    private fun hasDirectAudioExtension(url: String): Boolean {\n        val path = url.substringBefore('#').substringBefore('?').lowercase()\n        return DIRECT_AUDIO_EXTENSIONS.any { path.endsWith(\".$it\") }\n    }\n\n    internal fun createExternalAudioSource(\n        context: Context,\n        audio: com.nuvio.tv.domain.model.ExternalAudio\n    ): MediaSource? {\n        val audioUrl = audio.url.substringBefore(\"#.m3u8\").takeIf { it.startsWith(\"http\") } ?: return null\n        val audioHeaders = sanitizeHeaders(audio.headers.orEmpty())\n        val mime = if (audioUrl.contains(\".mpd\", ignoreCase = true)) {\n            MimeTypes.APPLICATION_MPD\n        } else if (audioUrl.contains(\".m3u8\", ignoreCase = true) ||\n            audio.url.endsWith(\"#.m3u8\")\n        ) {\n            MimeTypes.APPLICATION_M3U8\n        } else if (hasDirectAudioExtension(audioUrl)) {\n            null\n        } else {\n            // Extensionless audio links (typical for CDN playlists) are HLS.\n            MimeTypes.APPLICATION_M3U8\n        }\n        val dataSourceFactory = DefaultDataSource.Factory(\n            context,\n            PlayerPlaybackNetworking.createHttpDataSourceFactory(audioHeaders, useLongReadTimeout = false)\n        )\n        val itemBuilder = MediaItem.Builder().setUri(audioUrl)\n        mime?.let(itemBuilder::setMimeType)\n        val item = itemBuilder.build()\n        return when (mime) {\n            MimeTypes.APPLICATION_M3U8 -> HlsMediaSource.Factory(dataSourceFactory)\n                .setAllowChunklessPreparation(true)\n                .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)\n                .createMediaSource(item)\n            MimeTypes.APPLICATION_MPD -> DashMediaSource.Factory(dataSourceFactory)\n                .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)\n                .createMediaSource(item)\n            else -> DefaultMediaSourceFactory(dataSourceFactory)\n                .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)\n                .createMediaSource(item)\n        }\n    }\n\n    private fun createBaseMediaSource(\n        context: Context,\n        url: String,\n        headers: Map<String, String>,\n        subtitleConfigurations: List<MediaItem.SubtitleConfiguration>,\n        subtitleRoutes: Map<String, SubtitleRoute>,\n        filename: String?,\n        responseHeaders: Map<String, String>,\n        mimeTypeOverride: String?,\n        audioDelayUsProvider: (() -> Long)?,\n        mediaMetadata: androidx.media3.common.MediaMetadata?,\n        cacheKey: String?,\n        bluray: BlurayPlaylistResolver.RemoteLayout?,\n        useDiskCache: Boolean = true\n"
    },
    {
     "file": "app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerMediaSourceFactory.kt",
@@ -150,8 +144,8 @@
    },
    {
     "file": "app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeControllerInitialization.kt",
-    "old": "                    cacheKey = currentStreamCacheKey\n",
-    "new": "                    cacheKey = currentStreamCacheKey,\n                    externalAudios = streamExternalAudios\n"
+    "old": "                    bluray = currentStreamBluray\n",
+    "new": "                    bluray = currentStreamBluray,\n                    externalAudios = streamExternalAudios\n"
    },
    {
     "file": "app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeControllerInitialization.kt",
@@ -180,8 +174,8 @@
    },
    {
     "file": "app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeControllerStreams.kt",
-    "old": "                        cacheKey = currentStreamCacheKey\n",
-    "new": "                        cacheKey = currentStreamCacheKey,\n                        externalAudios = streamExternalAudios\n"
+    "old": "                        bluray = currentStreamBluray\n",
+    "new": "                        bluray = currentStreamBluray,\n                        externalAudios = streamExternalAudios\n"
    }
   ]
  },
@@ -190,8 +184,8 @@
   "edits": [
    {
     "file": "app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeControllerTrackSelection.kt",
-    "old": "            cacheKey = currentStreamCacheKey\n",
-    "new": "            cacheKey = currentStreamCacheKey,\n            externalAudios = streamExternalAudios\n"
+    "old": "            bluray = currentStreamBluray\n",
+    "new": "            bluray = currentStreamBluray,\n            externalAudios = streamExternalAudios\n"
    }
   ]
  },
@@ -236,13 +230,7 @@
    {
     "file": "app/src/main/java/com/nuvio/tv/ui/screens/stream/StreamScreenViewModel.kt",
     "old": "import com.nuvio.tv.ui.screens.player.SourceFallbackHandoff\n",
-    "new": "import com.nuvio.tv.ui.screens.player.SourceFallbackHandoff\nimport com.nuvio.tv.ui.screens.player.StreamSidecarAudio\n",
-    "alts": [
-     {
-      "old": "import com.nuvio.tv.ui.screens.player.StreamSidecarSubtitles\n",
-      "new": "import com.nuvio.tv.ui.screens.player.StreamSidecarAudio\nimport com.nuvio.tv.ui.screens.player.StreamSidecarSubtitles\n"
-     }
-    ]
+    "new": "import com.nuvio.tv.ui.screens.player.SourceFallbackHandoff\nimport com.nuvio.tv.ui.screens.player.StreamSidecarAudio\n"
    },
    {
     "file": "app/src/main/java/com/nuvio/tv/ui/screens/stream/StreamScreenViewModel.kt",

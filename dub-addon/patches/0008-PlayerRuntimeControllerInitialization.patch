@@ -1,8 +1,8 @@
 diff --git a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeControllerInitialization.kt b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeControllerInitialization.kt
-index 4044e8b72..ca3b0f13e 100644
+index bdacf30f8..53e538639 100644
 --- a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeControllerInitialization.kt
 +++ b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeControllerInitialization.kt
-@@ -227,6 +227,20 @@ internal fun PlayerRuntimeController.initializePlayer(
+@@ -274,6 +274,20 @@ internal fun PlayerRuntimeController.initializePlayer(
              if (effectiveInternalPlayerEngine == InternalPlayerEngine.AUTO) {
                  effectiveInternalPlayerEngine = resolveAutoInternalPlayerEngine()
              }
@@ -23,17 +23,17 @@ index 4044e8b72..ca3b0f13e 100644
              runtimeInternalPlayerEngineOverride = overrideInternalPlayerEngine
              if (overrideInternalPlayerEngine == null && playerSettings.internalPlayerEngine == InternalPlayerEngine.AUTO) {
                  resolvedAutoPlayerEngine = effectiveInternalPlayerEngine
-@@ -1086,7 +1100,8 @@ internal fun PlayerRuntimeController.initializePlayer(
-                     mimeTypeOverride = currentStreamMimeType,
+@@ -1162,7 +1176,8 @@ internal fun PlayerRuntimeController.initializePlayer(
                      audioDelayUsProvider = audioDelayUs::get,
                      mediaMetadata = buildMediaSessionMetadata(),
--                    cacheKey = currentStreamCacheKey
-+                    cacheKey = currentStreamCacheKey,
+                     cacheKey = currentStreamCacheKey,
+-                    bluray = currentStreamBluray
++                    bluray = currentStreamBluray,
 +                    externalAudios = streamExternalAudios
                  )
  
                  if (initialResumePosition > 0L) {
-@@ -1146,6 +1161,10 @@ internal fun PlayerRuntimeController.initializePlayer(
+@@ -1224,6 +1239,10 @@ internal fun PlayerRuntimeController.initializePlayer(
                          )
                          if (playbackState == Player.STATE_READY) {
                              mediaSourceFactory.unlockStartupPrefetch()

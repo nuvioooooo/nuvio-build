@@ -1,8 +1,8 @@
 diff --git a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeController.kt b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeController.kt
-index 9e57ddc..35c878f 100644
+index 8c1f58532..8b4d07b7c 100644
 --- a/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeController.kt
 +++ b/app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeController.kt
-@@ -237,6 +237,10 @@ class PlayerRuntimeController(
+@@ -242,6 +242,10 @@ class PlayerRuntimeController(
      internal var currentStreamMimeType: String?
      internal var currentHeaders: Map<String, String>
      internal var streamSubtitles: List<Subtitle> = emptyList()
@@ -13,7 +13,7 @@ index 9e57ddc..35c878f 100644
  
      init {
          val initialPlaybackRequest = PlayerMediaSourceFactory.normalizePlaybackRequest(
-@@ -252,6 +256,8 @@ class PlayerRuntimeController(
+@@ -257,6 +261,8 @@ class PlayerRuntimeController(
          currentHeaders = initialPlaybackRequest.headers
          streamSubtitles = StreamSidecarSubtitles.forUrl(initialStreamUrl)
              .ifEmpty { StreamSidecarSubtitles.forUrl(currentStreamUrl) }
