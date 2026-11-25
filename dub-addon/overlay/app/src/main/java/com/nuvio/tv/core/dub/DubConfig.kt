@@ -50,10 +50,17 @@ internal data class DubRequest(
     val year: Int?,
     val isMovie: Boolean,
     val season: Int?,
-    val episode: Int?
+    val episode: Int?,
+    /**
+     * Length of the video that is playing, when the player knows it. It is NOT used to search or to
+     * match a page (see [toVars]); it only ranks the dubs that were found: the ones whose length is
+     * closest to this are kept.
+     */
+    val filmDurationMs: Long? = null
 ) {
     fun cacheKey(): String =
-        "${if (isMovie) "m" else "s"}|${imdbId.orEmpty()}|${title.orEmpty()}|${year ?: ""}|${season ?: ""}|${episode ?: ""}"
+        "${if (isMovie) "m" else "s"}|${imdbId.orEmpty()}|${title.orEmpty()}|${year ?: ""}|${season ?: ""}|${episode ?: ""}" +
+            "|${(filmDurationMs ?: 0L) / 60_000L}"
 
     fun toVars(): Map<String, String> {
         val vars = LinkedHashMap<String, String>()
@@ -75,7 +82,9 @@ internal data class DubHit(
     val label: String,
     val lang: String,
     val providerId: String,
-    val audioDelayMs: Int = 0
+    val audioDelayMs: Int = 0,
+    /** Length of the dub in ms, read from its HLS playlist; null when it could not be read. */
+    val durationMs: Long? = null
 )
 
 internal object DubConfigParser {

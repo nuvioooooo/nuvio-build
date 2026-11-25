@@ -13,6 +13,24 @@ internal object DubHls {
     private val ATTR = Regex("""([A-Z0-9-]+)=("[^"]*"|[^,]*)""")
     private val VIDEO_CODEC = Regex("avc|hvc|hev|vp0?9|av01", RegexOption.IGNORE_CASE)
 
+    private val EXTINF = Regex("""#EXTINF:\s*([0-9]+(?:\.[0-9]+)?)""")
+
+    /**
+     * Total length of a finished (VOD) media playlist: the sum of its #EXTINF segment lengths.
+     * Null for a master playlist, a live playlist (no #EXT-X-ENDLIST) or anything without segments.
+     */
+    fun durationMs(text: String): Long? {
+        if (text.contains("#EXT-X-STREAM-INF")) return null
+        if (!text.contains("#EXT-X-ENDLIST")) return null
+        var seconds = 0.0
+        var segments = 0
+        for (m in EXTINF.findAll(text)) {
+            seconds += m.groupValues[1].toDoubleOrNull() ?: continue
+            segments++
+        }
+        return if (segments == 0) null else (seconds * 1000.0).toLong()
+    }
+
     private fun attrs(line: String): Map<String, String> {
         val out = HashMap<String, String>()
         for (m in ATTR.findAll(line)) {

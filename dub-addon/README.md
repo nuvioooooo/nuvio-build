@@ -104,6 +104,13 @@ Sorun giderme (Logcat `DubStretch`): `dub format tagged` satırı var ama `stret
 
 Kapsam dışı: yalnızca ExoPlayer'da çalışır; oran elle girilemez; hatırlanan oran sonraki açılışlarda da uygulanır.
 
+## Film süresine en yakın 2 dublaj
+Bulunan dublajlardan yalnızca **film süresine en yakın ilk ikisi** oynatıcıya verilir; en yakın olan 1. sıradadır ve otomatik seçilir.
+- Dublajın süresi, ses akışının (HLS) küçük oynatma listesindeki `#EXTINF` değerlerinin toplamından okunur (`DubHls.durationMs`); ayrı bir ses indirmesi ya da ek oynatıcı açılışı yoktur. Okunamayan (süresi bilinmeyen) kaynaklar süresi bilinenlerden sonra, dosyadaki sırayla gelir.
+- Film süresi aramayı ya da sayfa eşleştirmeyi **etkilemez**; yalnızca bulunanları sıralamak için kullanılır (`DubRequest.filmDurationMs`). Süre bilinmiyorsa dosyadaki ilk iki kaynak kalır.
+- Sayı `DubSourceManager.MAX_DUBS` sabitindedir. Süre farkı Logcat'te `DubSource` etiketiyle yazılır (`diff=…ms -> kept #1`).
+- Not: 25 fps PAL hızındaki dublaj (film %4,1 uzun/kısa) süre olarak uzak görünür; daha yakın iki kaynak varsa elenir.
+
 ## Nasıl güncellenir?
 - Her gün otomatik kontrol edilir. İş akışı Nuvio'nun **en son yayınlanan sürümüne** (Releases) bakar.
   Nuvio yeni bir sürüm yayınlamadıysa ve `dub-addon/` değişmediyse derleme atlanır. Ara commit'ler yeni APK üretmez.

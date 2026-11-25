@@ -4,6 +4,7 @@ package com.nuvio.tv.ui.screens.player
 
 import android.util.Log
 import android.widget.Toast
+import androidx.media3.common.C
 import com.nuvio.tv.core.dub.DubAutoSettings
 import com.nuvio.tv.core.dub.DubOutcome
 import com.nuvio.tv.core.dub.DubRequest
@@ -70,8 +71,9 @@ private fun PlayerRuntimeController.buildDubRequest(): DubRequest {
     val imdbId = listOf(contentId, videoId)
         .firstOrNull { it?.startsWith("tt") == true }
         ?.substringBefore(':')
-    // The video length is deliberately not sent: it differs between releases of the same film and
-    // made correct matches fail. Matching is by title + year, confirmed by the IMDb id.
+    // The video length is deliberately NOT used to find or match a page (it differs between releases
+    // of the same film and made correct matches fail): matching is by title + year, confirmed by the
+    // IMDb id. It only ranks the dubs that were found; the two closest in length are kept.
     val isMovie = contentType.equals("movie", ignoreCase = true)
     return DubRequest(
         imdbId = imdbId,
@@ -81,6 +83,7 @@ private fun PlayerRuntimeController.buildDubRequest(): DubRequest {
         year = if (isMovie) year?.take(4)?.toIntOrNull() else null,
         isMovie = isMovie,
         season = currentSeason,
-        episode = currentEpisode
+        episode = currentEpisode,
+        filmDurationMs = _exoPlayer?.duration?.takeIf { it != C.TIME_UNSET && it > 0L }
     )
 }

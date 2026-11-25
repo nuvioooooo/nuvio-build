@@ -18,11 +18,12 @@ import okhttp3.Request
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 
 private const val MANAGER_TAG = "DubSource"
 
 internal sealed class DubOutcome {
-    /** Every distinct Turkish dub that was found, in provider order (the first one is auto-selected). */
+    /** The Turkish dubs kept for this video (at most two, the one closest in length first; the first is auto-selected). */
     data class Found(val audios: List<ExternalAudio>) : DubOutcome()
     data object NotFound : DubOutcome()
     data object AutoDisabled : DubOutcome()
@@ -47,6 +48,16 @@ internal object DubSourceManager {
     private const val FOUND_TTL_MS = 30L * 60 * 1000
     private const val MISS_TTL_MS = 10L * 60 * 1000
     private const val SEARCH_TIMEOUT_MS = 30_000L
+
+    /** At most this many dubs are handed to the player: the ones closest to the video's length. */
+    private const val MAX_DUBS = 2
+    private const val DURATION_TIMEOUT_MS = 8_000L
+    private const val MAX_PLAYLIST_BYTES = 2L * 1024 * 1024
+    private const val PLAYLIST_UA =
+        "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) " +
+            "Chrome/124.0.0.0 Mobile Safari/537.36"
+    private val DIRECT_AUDIO_FILE =
+        Regex("""\.(mp3|aac|m4a|ogg|opus|flac|wav|mka|ac3|eac3|mp4|webm)$""", RegexOption.IGNORE_CASE)
 
     /** An empty [audios] list is a remembered miss. */
     private class Cached(val audios: List<ExternalAudio>, val at: Long)
@@ -93,7 +104,9 @@ internal object DubSourceManager {
             config.providers.map { provider ->
                 async {
                     try {
-                        withTimeoutOrNull(SEARCH_TIMEOUT_MS) { runner.find(provider, request) }
+                        withTimeoutOrNull(SEARCH_TIMEOUT_MS) {
+                            runner.find(provider, request)?.let { withDuration(it) }
+                        }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -104,26 +117,92 @@ internal object DubSourceManager {
             }.awaitAll()
         }.filterNotNull()
 
-        val audios = mergeHits(hits)
+        val audios = mergeHits(hits, request.filmDurationMs)
         resultCache[key] = Cached(audios, System.currentTimeMillis())
         return if (audios.isEmpty()) DubOutcome.NotFound else DubOutcome.Found(audios)
     }
 
+    /** Reads the dub's length from its (small) HLS playlist. A failure just leaves the length unknown. */
+    private suspend fun withDuration(hit: DubHit): DubHit = withContext(Dispatchers.IO) {
+        val ms = try {
+            fetchPlaylistDuration(hit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(MANAGER_TAG, "[${hit.providerId}] duration read failed: ${e.message}")
+            null
+        }
+        if (ms != null) hit.copy(durationMs = ms) else hit
+    }
+
+    private fun fetchPlaylistDuration(hit: DubHit): Long? {
+        val url = hit.url.substringBefore('#')
+        if (!url.startsWith("https://")) return null
+        if (DIRECT_AUDIO_FILE.containsMatchIn(url.substringBefore('?'))) return null // not a playlist
+        val builder = Request.Builder().url(url)
+        if (hit.headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+            builder.header("User-Agent", PLAYLIST_UA)
+        }
+        for ((k, v) in hit.headers) builder.header(k, v)
+        val shortClient = client.newBuilder().callTimeout(DURATION_TIMEOUT_MS, TimeUnit.MILLISECONDS).build()
+        return shortClient.newCall(builder.build()).execute().use { response ->
+            if (response.isSuccessful) DubHls.durationMs(response.peekBody(MAX_PLAYLIST_BYTES).string()) else null
+        }
+    }
+
+    /**
+     * Keeps the [MAX_DUBS] dubs whose length is closest to the video's, the closest first (the player
+     * selects the first one). Dubs whose length is unknown come after the ones that are known, in
+     * provider order. Without a known video length the first [MAX_DUBS] in provider order are kept.
+     */
+    private fun pickClosest(hits: List<DubHit>, filmDurationMs: Long?): List<DubHit> {
+        val film = filmDurationMs?.takeIf { it > 0L }
+        val ranked: List<DubHit> = if (film == null) {
+            hits
+        } else {
+            hits.withIndex()
+                .sortedWith(
+                    compareBy<IndexedValue<DubHit>>(
+                        { if (it.value.durationMs == null) 1 else 0 },
+                        { it.value.durationMs?.let { d -> abs(d - film) } ?: 0L },
+                        { it.index }
+                    )
+                )
+                .map { it.value }
+        }
+        ranked.forEachIndexed { i, hit ->
+            val d = hit.durationMs
+            Log.i(
+                MANAGER_TAG,
+                "[${hit.providerId}] dub length=${d ?: "?"}ms film=${film ?: "?"}ms " +
+                    (if (d != null && film != null) "diff=${abs(d - film)}ms " else "") +
+                    (if (i < MAX_DUBS) "-> kept #${i + 1}" else "-> dropped")
+            )
+        }
+        return ranked.take(MAX_DUBS)
+    }
+
     /**
      * Turns provider hits into the audio list for the menu. Two recipes that resolve to the same
-     * file (the URL differs only by its access token) show up once. Equal labels get a number so
-     * the rows stay distinguishable.
+     * file (the URL differs only by its access token) show up once. Of the rest only the dubs
+     * closest in length to the video are kept ([pickClosest]). Equal labels get a number so the
+     * rows stay distinguishable.
      */
-    private fun mergeHits(hits: List<DubHit>): List<ExternalAudio> {
+    private fun mergeHits(hits: List<DubHit>, filmDurationMs: Long?): List<ExternalAudio> {
         val seenFiles = HashSet<String>()
-        val labelCount = HashMap<String, Int>()
-        val out = ArrayList<ExternalAudio>()
+        val unique = ArrayList<DubHit>()
         for (hit in hits) {
             val fileKey = hit.url.substringBefore('#').substringBefore('?')
             if (!seenFiles.add(fileKey)) {
                 Log.i(MANAGER_TAG, "[${hit.providerId}] same audio file as an earlier source, skipped")
                 continue
             }
+            unique.add(hit)
+        }
+
+        val labelCount = HashMap<String, Int>()
+        val out = ArrayList<ExternalAudio>()
+        for (hit in pickClosest(unique, filmDurationMs)) {
             val n = (labelCount[hit.label] ?: 0) + 1
             labelCount[hit.label] = n
             val label = if (n == 1) hit.label else "${hit.label} ($n)"
