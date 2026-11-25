@@ -26,7 +26,7 @@ private const val DEFAULT_UA =
 
 /**
  * Runs a provider recipe: search page, pick a result, then walk the listed steps
- * (http_get, regex, json_path, rot13, base64, reverse, shift_key, set, check, replace, require,
+ * (http_get, http_post, xor_b64, regex, json_path, rot13, base64, reverse, shift_key, set, check, replace, require,
  * hls_audio, js_unpack, rapidrame_decode, rsc_enc_decrypt, js_object, pichive_sign) until one of them yields the audio URL.
  * Only these built-in operations exist; the recipe is data.
  */
@@ -136,6 +136,40 @@ internal class DubPipelineRunner(private val http: OkHttpClient) {
                         ?: provider.headers
                     fetch(url, referer, stepHeaders)
                         ?: return fail(provider, step, "request failed: $url")
+                }
+                "http_post" -> {
+                    val url = expand(p.optString("url", ""), vars, strict = true)
+                        ?: return fail(provider, step, "url has unresolved variables")
+                    val referer = p.optString("referer", "").takeIf { it.isNotEmpty() }
+                        ?.let { expand(it, vars, strict = false) }
+                    // Form alanları {değişken} içerebilir; boş değişken boş alan olarak gönderilir.
+                    val form = LinkedHashMap<String, String>()
+                    p.optJSONObject("form")?.let { o ->
+                        val keys = o.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            form[k] = expand(o.optString(k, ""), vars + ("cur" to cur), strict = false).orEmpty()
+                        }
+                    }
+                    // Adımın "headers" nesnesi sağlayıcı başlıklarına EKLENİR (http_get'teki gibi değiştirmez).
+                    val extra = LinkedHashMap<String, String>()
+                    p.optJSONObject("headers")?.let { o ->
+                        val keys = o.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            o.optString(k, "").takeIf { it.isNotEmpty() }?.let { extra[k] = it }
+                        }
+                    }
+                    postForm(url, referer, provider.headers + extra, form)
+                        ?: return fail(provider, step, "request failed: $url")
+                }
+                "xor_b64" -> {
+                    val a = expand(p.optString("a", ""), vars + ("cur" to cur), strict = true)
+                        ?: return fail(provider, step, "'a' has unresolved variables")
+                    val b = expand(p.optString("b", ""), vars + ("cur" to cur), strict = true)
+                        ?: return fail(provider, step, "'b' has unresolved variables")
+                    DubOps.xorBase64(a, b)
+                        ?: return fail(provider, step, "xor/base64 decode failed")
                 }
                 "regex" -> {
                     val patterns = mutableListOf<String>()
@@ -335,6 +369,21 @@ internal class DubPipelineRunner(private val http: OkHttpClient) {
         }
         if (!referer.isNullOrBlank()) builder.header("Referer", referer)
         if (jsonBody != null) builder.post(jsonBody.toRequestBody("application/json; charset=utf-8".toMediaType()))
+        return http.newCall(builder.build()).execute().use { response ->
+            if (response.isSuccessful) response.peekBody(MAX_BODY_BYTES).string() else null
+        }
+    }
+
+    private fun postForm(url: String, referer: String?, headers: Map<String, String>, form: Map<String, String>): String? {
+        if (!url.startsWith("https://")) return null
+        val builder = Request.Builder().url(url).header("User-Agent", DEFAULT_UA)
+        for ((k, v) in headers) {
+            if (k.equals("Content-Type", ignoreCase = true)) continue // form gövdesi kendi türünü taşır
+            builder.header(k, v)
+        }
+        if (!referer.isNullOrBlank()) builder.header("Referer", referer)
+        val body = okhttp3.FormBody.Builder().apply { for ((k, v) in form) add(k, v) }.build()
+        builder.post(body)
         return http.newCall(builder.build()).execute().use { response ->
             if (response.isSuccessful) response.peekBody(MAX_BODY_BYTES).string() else null
         }
