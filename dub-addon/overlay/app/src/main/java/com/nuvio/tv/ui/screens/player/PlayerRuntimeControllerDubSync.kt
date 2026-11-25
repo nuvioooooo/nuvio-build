@@ -51,8 +51,11 @@ private const val SYNC_MIN_START_MS = 60_000L
 private const val SYNC_END_MARGIN_MS = 60_000L
 private const val SYNC_MIN_DURATION_MS = 8 * 60_000L
 
-/** The aim: finish within this. Not a hard stop: it only decides whether an extra refinement window is worth it. */
-private const val SYNC_TARGET_MS = 60_000L
+/**
+ * After this many readable windows without ANY decodable original audio (TrueHD/DTS-HD without a
+ * decoder) while an embedded subtitle track exists, the audio stage is skipped and the subtitles are used.
+ */
+private const val AUDIO_GIVE_UP_WINDOWS = 2
 
 /** A window that takes longer than this is given up on (slow source, stalled download). */
 private const val SYNC_WINDOW_TIMEOUT_MS = 30_000L
@@ -292,6 +295,8 @@ private fun PlayerRuntimeController.startDubSync(
             val positions = ArrayList<Long>()
             var failed = 0
             var best: DubSyncAnalyzer.Result.Ok? = null
+            // True once it is clear the original's audio cannot be used: only the subtitles are tried then.
+            var audioSkipped = false
             var last: DubSyncAnalyzer.Result = DubSyncAnalyzer.Result.Unreliable("yeterli ses penceresi yok")
 
             for (i in starts.indices) {
@@ -354,20 +359,38 @@ private fun PlayerRuntimeController.startDubSync(
                 // Nothing readable at all: no point in trying further positions.
                 if (windows.isEmpty() && failed >= 2) break
 
+                // Audio first. Only when the original's audio is not decodable at all (and an embedded
+                // subtitle exists) the audio stage is skipped right away instead of waiting for more windows.
+                if (!audioSkipped && windows.size >= AUDIO_GIVE_UP_WINDOWS &&
+                    windows.none { it.first.bands != null } && windows.any { it.first.cueActivity != null }
+                ) {
+                    audioSkipped = true
+                    Log.i(DUB_SYNC_TAG, "original audio not decodable, embedded subtitle present: skipping the audio stage")
+                }
+
                 if (windows.size >= DubSyncAnalyzer.MIN_WINDOWS) {
-                    last = withContext(Dispatchers.Default) { DubSyncAnalyzer.analyze(windows, trace, positions.toList()) }
+                    // While more windows are coming the audio gets its chance first: no subtitle fallback yet.
+                    val subtitleOnly = audioSkipped
+                    last = withContext(Dispatchers.Default) {
+                        DubSyncAnalyzer.analyze(
+                            windows, trace, positions.toList(),
+                            subtitleFallback = subtitleOnly, skipAudio = subtitleOnly
+                        )
+                    }
                     val ok = last as? DubSyncAnalyzer.Result.Ok
                     if (ok != null) {
                         best = ok
-                        val elapsed = SystemClock.elapsedRealtime() - startedAt
-                        val perWindow = elapsed / (i + 1)
-                        // A coarse subtitle-only result is worth one more window while there is time and
-                        // the original's audio is readable (it can refine it to tens of ms).
-                        val canRefine = !ok.precise && DubSyncAnalyzer.hasOriginalAudio(windows) &&
-                            elapsed + perWindow <= SYNC_TARGET_MS
-                        if (!canRefine) break
+                        break
                     }
                 }
+            }
+            // All windows are read and the audio gave nothing: now (and only now) the subtitles are tried,
+            // on the same windows (the cues were captured with them, nothing is downloaded again).
+            if (best == null && !audioSkipped && windows.size >= DubSyncAnalyzer.MIN_WINDOWS) {
+                last = withContext(Dispatchers.Default) {
+                    DubSyncAnalyzer.analyze(windows, trace, positions.toList(), subtitleFallback = true)
+                }
+                (last as? DubSyncAnalyzer.Result.Ok)?.let { best = it }
             }
             // The prefetched dub window that is not needed any more.
             coroutineContext[Job]?.children?.forEach { it.cancel() }

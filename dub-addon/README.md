@@ -60,6 +60,38 @@ Kod: `mirrorAudioDelayToSubtitle()` (`PlayerRuntimeControllerDubSync.kt`). Dubla
 kaymasını Nuvio'nun kendi mantığıyla alır; çift sayılmasın diye o kısım düşülür. Kapatmak için `applyMeasuredDubDelay` ve
 `applyDubAudioDelay` içindeki `mirrorAudioDelayToSubtitle()` çağrılarını silmek yeter.
 
+## Senkron karar sırası: önce ses, altyazı yalnızca yedek
+Ölçüm bir **kademe**dir; iki yöntem oy birliğiyle değil, sırayla denenir (`DubSyncAnalyzer.analyze`):
+
+1. **Ses (müzik/efekt)** — kesin sonuç verirse hemen uygulanır ve **altyazıya hiç bakılmaz**. Ses sonucu ile altyazı sonucu
+   birbirinden çok farklı olsa bile (eskiden "yöntemler birbiriyle çelişiyor" diye çöpe atılırdı) artık **ses kazanır**.
+2. Ses kesin değilse, pencere başına tepe noktalarına doğru uydurulur (sabit doğru → sonuç, eğimli doğru → hız farkı/*Drift*).
+3. **Gömülü altyazı** — yalnızca ses 1. ve 2. adımda sonuç vermediyse devreye girer. Aynı pencereler kullanılır (altyazı
+   cue'ları pencereyle birlikte zaten okunmuştu), yeniden indirme yoktur. Sonuç yaklaşık (±150 ms) sayılır; ses kısmen
+   okunuyorsa ve altyazı değerinin ±300 ms çevresinde net bir tepe gösteriyorsa `gömülü altyazı + müzik/efekt` olarak inceltilir.
+4. Altyazıda da sabit/eğimli doğru aranır; hiçbiri yoksa "elle ayarlayın".
+
+**Denetleyici döngüsü** (`PlayerRuntimeControllerDubSync.kt`): pencereler okunurken her turda yalnızca ses analiz edilir
+(`subtitleFallback = false`). Tüm pencereler bitip ses sonuç vermediyse aynı pencerelerle altyazı denenir. Ses bulunur bulunmaz
+döngü durur; eski "altyazı sonucunu inceltmek için ek pencere" (`canRefine`) kaldırıldı.
+
+**TrueHD/DTS-HD gibi çözülemeyen orijinal ses:** ilk 2 pencerede hiçbir pencerede orijinal ses çözülemediyse ve videoda
+gömülü altyazı varsa ses aşaması atlanır (`skipAudio`), doğrudan altyazıyla ölçülür (Logcat `DubSync`:
+`skipping the audio stage`). Gömülü altyazı da yoksa ölçüm güvenilmez der.
+
+**Toast** hangi kademenin çalıştığını gösterir: `[müzik/efekt, 24 sn]`, `[gömülü altyazı – ses yetersizdi, 31 sn]`,
+`[gömülü altyazı + müzik/efekt, 31 sn]`.
+
+**Bilinen bedel:** ses kesin sonuç vermezse altyazıya geçmeden önce tüm pencereler (en çok 8) okunur; eskiden altyazı
+3. pencerede sonuç verirse ölçüm orada biterdi. Ses tek başına karar verdiği için eşikler (`minPsr`, destek oranı) eskisi
+gibi sıkı tutuldu; altyazı artık yanlış bir ses tepesini yakalayan ikinci bir kontrol değildir.
+
+**Birim test:** `overlay/app/src/test/java/com/nuvio/tv/core/dub/DubSyncAnalyzerTest.kt` (JVM, JUnit4, sentetik ve deterministik
+pencereler). Senaryolar: ses kesin + altyazı çelişiyor → ses kazanır; ikisi uyuşuyor; orijinal ses çözülemiyor → altyazı;
+ses yetersiz → altyazı yalnızca yedek (`subtitleFallback = false` iken sonuç yok); hiçbir şey okunamıyor → güvenilmez.
+Çalıştırmak için Nuvio klasöründe `./gradlew :app:testFullDebugUnitTest --tests "*DubSyncAnalyzerTest"` (görev adı
+flavor'a göre değişebilir).
+
 ## Senkron arama aralığı
 Otomatik ölçüm dublajın orijinalden **±15 saniyeye kadar** kaymış olmasını yakalar (eskiden ±8 sn). Bunun için her
 pencerede dublaj sesi, orijinalden 15 sn önce başlayıp 15 sn sonra biten, toplam 45 sn'lik bir parça olarak okunur;

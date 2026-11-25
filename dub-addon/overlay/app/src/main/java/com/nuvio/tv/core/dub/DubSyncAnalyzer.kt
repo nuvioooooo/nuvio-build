@@ -26,16 +26,21 @@ import kotlin.math.sqrt
  *    dialogue is not. Loudness onsets in the bass, low-mid and treble bands are matched. Precise
  *    (tens of ms) but it needs the original audio as PCM.
  *
- * Decision ([analyze]):
- *  - both conclusive and they agree  -> the music/effects value (precise)
- *  - both conclusive but disagree    -> rejected (one of them is wrong; better to do nothing)
- *  - only subtitles conclusive       -> subtitles, refined by music/effects inside +-[REFINE_RADIUS]
- *    frames when that shows a clear peak there
- *  - only music/effects conclusive   -> music/effects
- *  - otherwise                       -> the per-window peaks are fitted with a line (see [findDrift]):
- *      a constant line is a result after all (the odd window out is ignored), a sloped line is
- *      reported as [Result.Drift] (the dub runs at another speed); anything else is rejected and
- *      the user adjusts by hand
+ * Decision ([analyze]) is a CASCADE, not a vote. The subtitles are consulted ONLY when the audio
+ * (music/effects) did not give an answer:
+ *
+ *  1. music/effects conclusive                -> that value (precise); the subtitles are never looked at,
+ *     so they can no longer veto a correct audio result
+ *  2. music/effects: per-window peaks fit a line (see [fitDrift]): flat -> a result after all,
+ *     sloped -> [Result.Drift] (the dub runs at another speed)
+ *  3. (only when [subtitleFallback]) subtitles conclusive -> that value, refined by music/effects
+ *     inside +-[REFINE_RADIUS] frames when the audio is partly readable and shows a clear peak there
+ *  4. subtitles: the same line fit as in 2
+ *  5. otherwise rejected and the user adjusts by hand
+ *
+ * [subtitleFallback] = false is for the controller's loop: while more windows are still coming, the
+ * audio is given its chance first. [skipAudio] = true when the original's audio cannot be decoded at
+ * all (TrueHD/DTS-HD without a decoder): stage 1 is skipped.
  *
  * "Conclusive" always means: the windows' correlation curves are averaged (the true shift adds up
  * coherently, unrelated peaks cancel), the combined peak stands out from the rest of the curve,
@@ -84,9 +89,6 @@ internal object DubSyncAnalyzer {
     private const val REFINE_MIN_Z = 3.0
     private const val REFINE_MIN_SUPPORT = 2
 
-    /** Two conclusive methods must agree within this, otherwise the result is thrown away. */
-    private const val AGREE_MS = 300
-
     // Drift: every window's own peak is a point (film position, lag); a line through enough of them
     // says the lag is not constant. Random peaks are spread over +-15 s, so four of them landing
     // within a few hundred ms of one line by chance is practically impossible.
@@ -101,7 +103,7 @@ internal object DubSyncAnalyzer {
 
     enum class Method(val label: String) {
         MUSIC_EFFECTS("müzik/efekt"),
-        SUBTITLES("gömülü altyazı"),
+        SUBTITLES("gömülü altyazı – ses yetersizdi"),
         SUBTITLES_REFINED("gömülü altyazı + müzik/efekt")
     }
 
@@ -145,53 +147,63 @@ internal object DubSyncAnalyzer {
     /**
      * [windows] = (original, dub) captures for the same video stretches. [positionsMs] = the film
      * position (centre of the stretch) of each window, same order; without it a drift cannot be
-     * recognised.
+     * recognised. See the class comment for [subtitleFallback] and [skipAudio].
      */
     fun analyze(
         windows: List<Pair<ProbeCapture, ProbeCapture>>,
         trace: (String) -> Unit = {},
-        positionsMs: List<Long>? = null
+        positionsMs: List<Long>? = null,
+        subtitleFallback: Boolean = true,
+        skipAudio: Boolean = false
     ): Result {
         if (windows.size < MIN_WINDOWS) return Result.Unreliable("yeterli ses penceresi yok (${windows.size}/$MIN_WINDOWS)")
-
-        val subUsed = ArrayList<Int>()
-        val meUsed = ArrayList<Int>()
-        val sub = subtitleCurves(windows, subUsed)
-        val me = musicCurves(windows, meUsed)
-        val subVerdict = sub?.let { judge(it, SUB, "gömülü altyazı", trace) }
-        val meVerdict = me?.let { judge(it, ME, "müzik/efekt", trace) }
-
+        val positions = positionsMs?.takeIf { it.size == windows.size }
         val reasons = ArrayList<String>()
-        if (sub == null) reasons += "gömülü altyazı yok/yetersiz"
-        else if (subVerdict != null && !subVerdict.ok) reasons += subVerdict.reason
-        if (me == null) reasons += "orijinal ses çözülemedi"
-        else if (meVerdict != null && !meVerdict.ok) reasons += meVerdict.reason
 
-        val s = subVerdict?.takeIf { it.ok }
-        val m = meVerdict?.takeIf { it.ok }
-
-        if (s != null && m != null) {
-            val diff = abs(s.lagFrames - m.lagFrames) * FRAME_MS
-            trace("altyazı ${(s.lagFrames * FRAME_MS).toInt()}ms, müzik/efekt ${(m.lagFrames * FRAME_MS).toInt()}ms, fark ${diff.toInt()}ms")
-            if (diff > AGREE_MS) return Result.Unreliable("yöntemler birbiriyle çelişiyor")
-            return m.toOk(Method.MUSIC_EFFECTS, precise = true)
+        // ---- stage 1: music/effects ----
+        val meUsed = ArrayList<Int>()
+        val me = if (skipAudio) null else musicCurves(windows, meUsed)
+        if (me != null) {
+            val verdict = judge(me, ME, "müzik/efekt", trace)
+            if (verdict.ok) return verdict.toOk(Method.MUSIC_EFFECTS, precise = true)
+            reasons += verdict.reason
+            if (positions != null) {
+                fitDrift(me, meUsed, positions, ME, DRIFT_MIN_Z_ME, DRIFT_TOL_MS_ME, Method.MUSIC_EFFECTS, windows.size, trace)
+                    ?.let { return it }
+            }
+        } else {
+            reasons += "orijinal ses çözülemedi"
         }
-        if (m != null) return m.toOk(Method.MUSIC_EFFECTS, precise = true)
-        if (s != null) {
-            val refined = me?.let { refine(it, s.lagFrames, trace) }
+
+        if (!subtitleFallback) return Result.Unreliable(reasons.joinToString("; "))
+
+        // ---- stage 2: embedded subtitles (only because the audio gave nothing) ----
+        trace("ses yetersiz -> gömülü altyazıya geçildi")
+        val subUsed = ArrayList<Int>()
+        val sub = subtitleCurves(windows, subUsed)
+        if (sub == null) {
+            reasons += "gömülü altyazı yok/yetersiz"
+            return Result.Unreliable(reasons.joinToString("; "))
+        }
+        val subVerdict = judge(sub, SUB, "gömülü altyazı", trace)
+        if (subVerdict.ok) {
+            // Audio that is partly readable but was not conclusive may still pin the subtitle value down.
+            val refined = me?.let { refine(it, subVerdict.lagFrames, trace) }
             return if (refined != null) {
                 Result.Ok(
                     lagMs = Math.round(refined * FRAME_MS).toInt(),
                     method = Method.SUBTITLES_REFINED,
                     precise = true,
-                    psr = s.psr,
-                    support = s.support,
-                    windows = s.windows
+                    psr = subVerdict.psr,
+                    support = subVerdict.support,
+                    windows = subVerdict.windows
                 )
-            } else s.toOk(Method.SUBTITLES, precise = false)
+            } else subVerdict.toOk(Method.SUBTITLES, precise = false)
         }
-        if (positionsMs != null && positionsMs.size == windows.size) {
-            findDrift(sub, subUsed, me, meUsed, positionsMs, windows.size, trace)?.let { return it }
+        reasons += subVerdict.reason
+        if (positions != null) {
+            fitDrift(sub, subUsed, positions, SUB, DRIFT_MIN_Z_SUB, DRIFT_TOL_MS_SUB, Method.SUBTITLES, windows.size, trace)
+                ?.let { return it }
         }
         return Result.Unreliable(reasons.joinToString("; ").ifEmpty { "eşleşme bulunamadı" })
     }
@@ -379,30 +391,24 @@ internal object DubSyncAnalyzer {
     }
 
     /**
-     * Last resort when neither method gave one constant shift over all windows. Fits a line through
-     * each method's per-window peaks. Flat line (the windows that disagreed were just noise):
-     * a normal result. Sloped line: [Result.Drift]. Both methods with lines that disagree: rejected.
+     * Fits a line through ONE method's per-window peaks. Flat line (the windows that disagreed were
+     * just noise): a normal result. Sloped line: [Result.Drift]. null when no line is found.
      */
-    private fun findDrift(
-        sub: List<DoubleArray>?,
-        subUsed: List<Int>,
-        me: List<DoubleArray>?,
-        meUsed: List<Int>,
+    private fun fitDrift(
+        curves: List<DoubleArray>,
+        used: List<Int>,
         positionsMs: List<Long>,
+        t: Tuning,
+        minZ: Double,
+        tolMs: Double,
+        method: Method,
         windowCount: Int,
         trace: (String) -> Unit
     ): Result? {
-        val meFit = me?.let { fitLine(lagPoints(it, meUsed, positionsMs, ME, DRIFT_MIN_Z_ME), DRIFT_TOL_MS_ME) }
-        val subFit = sub?.let { fitLine(lagPoints(it, subUsed, positionsMs, SUB, DRIFT_MIN_Z_SUB), DRIFT_TOL_MS_SUB) }
-        trace("kayma doğrusu: müzik/efekt=${meFit?.describe()} altyazı=${subFit?.describe()}")
-        if (meFit == null && subFit == null) return null
-
-        val method = if (meFit != null) Method.MUSIC_EFFECTS else Method.SUBTITLES
-        val fit = meFit ?: subFit!!
+        val fit = fitLine(lagPoints(curves, used, positionsMs, t, minZ), tolMs)
+        trace("kayma doğrusu (${method.label}): ${fit?.describe()}")
+        if (fit == null) return null
         val centerMs = fit.inliers.sumOf { it.posMs } / fit.inliers.size
-        if (meFit != null && subFit != null && abs(meFit.lagAt(centerMs) - subFit.lagAt(centerMs)) > AGREE_MS) {
-            return Result.Unreliable("yöntemler birbiriyle çelişiyor")
-        }
         val spanMs = fit.inliers.maxOf { it.posMs } - fit.inliers.minOf { it.posMs }
         val meanZ = fit.inliers.sumOf { it.z } / fit.inliers.size
         return if (abs(fit.slope) * spanMs < DRIFT_MIN_TOTAL_MS) {
