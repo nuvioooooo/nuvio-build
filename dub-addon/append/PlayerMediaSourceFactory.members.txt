@@ -1,0 +1,72 @@
+
+    // ---- dub-addon: harici (dublaj) ses kaynakları (apply-hooks.py sınıfın sonuna ekler) ----
+    /** Controller ayarlar; createMediaSource'ta `externalAudios` verilmediyse bu liste birleştirilir. */
+    @Volatile
+    internal var dubExternalAudios: List<com.nuvio.tv.domain.model.ExternalAudio> = emptyList()
+
+    private val dubDirectAudioExtensions =
+        listOf("mp3", "aac", "m4a", "ogg", "opus", "flac", "wav", "mka", "ac3", "eac3", "mp4", "webm")
+
+    private fun dubHasDirectAudioExtension(url: String): Boolean {
+        val path = url.substringBefore('#').substringBefore('?').lowercase()
+        return dubDirectAudioExtensions.any { path.endsWith(".$it") }
+    }
+
+    internal fun createExternalAudioSource(
+        context: Context,
+        audio: com.nuvio.tv.domain.model.ExternalAudio
+    ): MediaSource? {
+        val audioUrl = audio.url.substringBefore("#.m3u8").takeIf { it.startsWith("http") } ?: return null
+        val audioHeaders = sanitizeHeaders(audio.headers.orEmpty())
+        val mime = if (audioUrl.contains(".mpd", ignoreCase = true)) {
+            MimeTypes.APPLICATION_MPD
+        } else if (audioUrl.contains(".m3u8", ignoreCase = true) ||
+            audio.url.endsWith("#.m3u8")
+        ) {
+            MimeTypes.APPLICATION_M3U8
+        } else if (dubHasDirectAudioExtension(audioUrl)) {
+            null
+        } else {
+            // Extensionless audio links (typical for CDN playlists) are HLS.
+            MimeTypes.APPLICATION_M3U8
+        }
+        val dataSourceFactory = DefaultDataSource.Factory(
+            context,
+            PlayerPlaybackNetworking.createHttpDataSourceFactory(audioHeaders, useLongReadTimeout = false)
+        )
+        val itemBuilder = MediaItem.Builder().setUri(audioUrl)
+        mime?.let(itemBuilder::setMimeType)
+        val item = itemBuilder.build()
+        return when (mime) {
+            MimeTypes.APPLICATION_M3U8 -> HlsMediaSource.Factory(dataSourceFactory)
+                .setAllowChunklessPreparation(true)
+                .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+                .createMediaSource(item)
+            MimeTypes.APPLICATION_MPD -> DashMediaSource.Factory(dataSourceFactory)
+                .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+                .createMediaSource(item)
+            else -> DefaultMediaSourceFactory(dataSourceFactory)
+                .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+                .createMediaSource(item)
+        }
+    }
+
+    /**
+     * Dublaj seslerini ana kaynakla birleştirir. Başka hızdaki (25 fps PAL / 23.976 fps film)
+     * dublaj film zamanına çevrilir; sesi DubStretchAudioSink uzatır. Normal dublaja dokunulmaz.
+     * clipDurations: kısa kaynak oynatmayı kilitlemesin.
+     */
+    internal fun mergeDubAudios(
+        context: Context,
+        base: MediaSource,
+        externalAudios: List<com.nuvio.tv.domain.model.ExternalAudio>
+    ): MediaSource {
+        if (externalAudios.isEmpty()) return base
+        val audioSources = externalAudios.mapNotNull { audio ->
+            createExternalAudioSource(context, audio)
+                ?.let { DubStretchMediaSource.wrapIfNeeded(it, audio.stretchRatio) }
+        }
+        Log.i(LOG_TAG, "EXTERNAL_AUDIO: requested=${externalAudios.size} built=${audioSources.size}")
+        if (audioSources.isEmpty()) return base
+        return androidx.media3.exoplayer.source.MergingMediaSource(false, true, base, *audioSources.toTypedArray())
+    }

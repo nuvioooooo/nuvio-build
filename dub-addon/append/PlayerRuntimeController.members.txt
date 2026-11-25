@@ -1,0 +1,17 @@
+
+    // ---- dub-addon: durum alanları (apply-hooks.py sınıfın sonuna ekler) ----
+    internal var streamExternalAudios: List<com.nuvio.tv.domain.model.ExternalAudio> = emptyList()
+        set(value) {
+            field = value
+            // createMediaSource açıkça dublaj verilmeyen çağrılarda bu listeyi kullanır.
+            mediaSourceFactory.dubExternalAudios = value
+        }
+    internal var dubSearchJob: kotlinx.coroutines.Job? = null
+    internal var dubSyncJob: kotlinx.coroutines.Job? = null
+    internal var dubAutoSearchStarted = false
+
+    init {
+        DubUi.attach(this)
+        streamExternalAudios = StreamSidecarAudio.forUrl(initialStreamUrl)
+            .ifEmpty { StreamSidecarAudio.forUrl(currentStreamUrl) }
+    }
